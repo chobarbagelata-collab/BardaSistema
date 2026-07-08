@@ -1,0 +1,27 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brown: #3D1F0D;
+  --color-terra: #C47A3A;
+  --color-cream: #F2E8D9;
+  --color-light-cream: #FAF6F0;
+  --color-sand: #E8DDD0;
+  --color-stone: #9E8878;
+  --color-white: #FFFDF9;
+  --color-error: #B94040;
+  
+  --font-serif: "Playfair Display", serif;
+  --font-sans: "Mulish", sans-serif;
+}
+
+@layer base {
+  body {
+    font-family: var(--font-sans);
+    background-color: var(--color-light-cream);
+    color: var(--color-brown);
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-serif);
+  }
+}

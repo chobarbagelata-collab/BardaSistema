@@ -1,0 +1,6 @@
+{
+  "name": "Barda Presupuestos y Ventas",
+  "description": "Sistema completo de presupuestación, gestión de ventas, remitos y control de fabricación para Barda Muebles.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

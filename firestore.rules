@@ -1,0 +1,45 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Catch-all: Deny all by default to protect any other potential endpoints
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // barda_users: Allow read to verify if system has users or check profile, write requires authentication
+    match /barda_users/{userId} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // barda_invitations: Allow public retrieval of a single invitation (get) by code ID to validate registers, listing/writing requires authentication
+    match /barda_invitations/{invitationId} {
+      allow get: if true;
+      allow list, write: if request.auth != null;
+    }
+
+    match /barda_sales_orders/{orderId} {
+      allow read, write: if request.auth != null;
+    }
+
+    match /barda_fixed_costs/{costId} {
+      allow read, write: if request.auth != null;
+    }
+
+    match /barda_payments_ledger/{paymentId} {
+      allow read, write: if request.auth != null;
+    }
+
+    match /barda_quotes_log/{quoteId} {
+      allow read, write: if request.auth != null;
+    }
+
+    match /barda_funnel_overrides/{overrideId} {
+      allow read, write: if request.auth != null;
+    }
+
+    match /barda_fabricacion_list/{fabId} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
