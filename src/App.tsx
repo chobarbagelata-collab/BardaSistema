@@ -361,7 +361,7 @@ export default function App() {
   // Remito Builder forms
   const [remitoSillaForm, setRemitoSillaForm] = useState({ model: '', wood: '', fabric: '', color: '' });
   const [remitoMesaForm, setMesaFormRemito] = useState({ wood: '', w: '', h: '', base: '', color: '', veteado: '', brillo: '' });
-  const [remitoCircularForm, setCircularFormRemito] = useState({ wood: '', w: '', h: '', base: '', color: '', veteado: '', brillo: '' });
+  const [remitoCircularForm, setCircularFormRemito] = useState({ wood: '', diametro: '', base: '', color: '', veteado: '', brillo: '' });
   const [remitoRatonaForm, setRatonaFormRemito] = useState({ wood: '', w: '', h: '' });
   const [remitoOtroForm, setOtroFormRemito] = useState({ nombre: '', detalle: '', precio: '' });
 
@@ -417,7 +417,7 @@ export default function App() {
   // Active Quote Builders State
   const [sillaForm, setSillaForm] = useState({ model: '', wood: '', fabric: '', color: '' });
   const [mesaForm, setMesaForm] = useState({ wood: '', w: '', h: '', base: '', color: '', veteado: '', brillo: '' });
-  const [circularForm, setCircularForm] = useState({ wood: '', w: '', h: '', base: '', color: '', veteado: '', brillo: '' });
+  const [circularForm, setCircularForm] = useState({ wood: '', diametro: '', base: '', color: '', veteado: '', brillo: '' });
   const [ratonaForm, setRatonaForm] = useState({ wood: '', w: '', h: '' });
   const [otroForm, setOtroForm] = useState({ nombre: '', detalle: '', precio: '' });
 
@@ -861,7 +861,7 @@ export default function App() {
 
   useEffect(() => {
     setBudgetCircularOverride({ value: null, editing: false });
-  }, [circularForm.wood, circularForm.w, circularForm.h]);
+  }, [circularForm.wood, circularForm.diametro]);
 
   useEffect(() => {
     setBudgetRatonaOverride({ value: null, editing: false });
@@ -1062,27 +1062,44 @@ export default function App() {
   };
 
   const addMesaRemito = (type: 'mesa' | 'circular') => {
-    const f = type === 'mesa' ? remitoMesaForm : remitoCircularForm;
     const dataList = type === 'mesa' ? catalog.tables : catalog.circular;
     const overrideState = type === 'mesa' ? remitoMesaOverride : remitoCircularOverride;
     const setOverrideState = type === 'mesa' ? setRemitoMesaOverride : setRemitoCircularOverride;
-    const product = dataList.find(t => t.name === f.wood);
-    const wn = parseNum(f.w);
-    const hn = parseNum(f.h);
-    if (!product || isNaN(wn) || !hn) return;
 
-    const m2 = wn * hn;
-    const minM2 = type === 'mesa' ? 1.6 : null;
-    const billableM2 = minM2 && m2 < minM2 ? minM2 : m2;
-    const calcPrice = product.pricePerM2 * billableM2;
+    let f: any;
+    let calcPrice: number;
+    let detail: string;
+
+    if (type === 'mesa') {
+      f = remitoMesaForm;
+      const product = dataList.find(t => t.name === f.wood);
+      const wn = parseNum(f.w);
+      const hn = parseNum(f.h);
+      if (!product || isNaN(wn) || !hn) return;
+
+      const m2 = wn * hn;
+      const minM2 = 1.6;
+      const billableM2 = m2 < minM2 ? minM2 : m2;
+      calcPrice = product.pricePerM2 * billableM2;
+
+      detail = `${wn}m × ${hn}m = ${m2.toFixed(2)}m² · Base: ${f.base}`;
+      if (m2 < minM2) detail += ` (Minimo facturado ${minM2}m²)`;
+    } else {
+      f = remitoCircularForm;
+      const product = dataList.find(t => t.name === f.wood);
+      const diametroCm = parseNum(f.diametro);
+      if (!product || isNaN(diametroCm) || diametroCm <= 0) return;
+
+      calcPrice = product.pricePerM2 * (diametroCm / 100);
+      detail = `Ø${diametroCm}cm · Base: ${f.base}`;
+    }
+
     const price = overrideState.value !== null ? overrideState.value : calcPrice;
     if (!price) return;
-    
+
     const isMicro = f.wood === 'Microcemento';
     const qty = parseInt((document.getElementById(`r${type === 'mesa' ? 'm' : 'c'}-qty`) as HTMLInputElement)?.value) || 1;
 
-    let detail = `${wn}m × ${hn}m = ${m2.toFixed(2)}m² · Base: ${f.base}`;
-    if (minM2 && m2 < minM2) detail += ` (Minimo facturado ${minM2}m²)`;
     if (isMicro) detail += ` · Color: ${f.color} · Vet: ${f.veteado} · Brillo: ${f.brillo}`;
 
     const newItem = {
@@ -1098,7 +1115,7 @@ export default function App() {
     if (type === 'mesa') {
       setMesaFormRemito({ wood: '', w: '', h: '', base: '', color: '', veteado: '', brillo: '' });
     } else {
-      setCircularFormRemito({ wood: '', w: '', h: '', base: '', color: '', veteado: '', brillo: '' });
+      setCircularFormRemito({ wood: '', diametro: '', base: '', color: '', veteado: '', brillo: '' });
     }
     setOverrideState({ value: null, editing: false });
   };
@@ -1257,9 +1274,23 @@ export default function App() {
         const cost = costProduct?.prices?.[normWood]?.[fabric];
         if (cost) return cost;
       }
-    } else if (cat === 'Mesas' || cat === 'Mesas Circulares' || cat === 'Ratonas') {
-      const wood = item.wood || item.name.replace(/^(Mesa Circular |Mesa Ratona |Mesa )/, '');
-      const list = cat === 'Mesas' ? costsCatalog.tables : cat === 'Mesas Circulares' ? costsCatalog.circular : costsCatalog.ratonas;
+    } else if (cat === 'Mesas Circulares') {
+      const wood = item.wood || item.name.replace(/^Mesa Circular /, '');
+      const costProduct = costsCatalog.circular?.find((t: any) => t.name.toLowerCase() === wood.toLowerCase());
+      const costPerM2 = costProduct?.pricePerM2;
+      if (costPerM2) {
+        let diametroCm = item.diametro;
+        if (diametroCm === undefined) {
+          const match = item.detail?.match(/Ø\s*([\d.,]+)\s*cm/);
+          diametroCm = match ? parseFloat(match[1].replace(',', '.')) : undefined;
+        }
+        if (diametroCm) {
+          return Math.round(costPerM2 * (diametroCm / 100));
+        }
+      }
+    } else if (cat === 'Mesas' || cat === 'Ratonas') {
+      const wood = item.wood || item.name.replace(/^(Mesa Ratona |Mesa )/, '');
+      const list = cat === 'Mesas' ? costsCatalog.tables : costsCatalog.ratonas;
       const costProduct = list?.find((t: any) => t.name.toLowerCase() === wood.toLowerCase());
       const costPerM2 = costProduct?.pricePerM2;
       if (costPerM2) {
@@ -1273,8 +1304,8 @@ export default function App() {
         }
         if (w && h) {
           const m2 = w * h;
-          const minM2 = cat === 'Mesas' ? 1.6 : cat === 'Ratonas' ? 1.4 : null;
-          const billableM2 = minM2 && m2 < minM2 ? minM2 : m2;
+          const minM2 = cat === 'Mesas' ? 1.6 : 1.4;
+          const billableM2 = m2 < minM2 ? minM2 : m2;
           return Math.round(costPerM2 * billableM2);
         }
       }
@@ -1325,30 +1356,46 @@ export default function App() {
   };
 
   const addMesa = (type: 'mesa' | 'circular') => {
-    const f = type === 'mesa' ? mesaForm : circularForm;
     const dataList = type === 'mesa' ? catalog.tables : catalog.circular;
-    const product = dataList.find(t => t.name === f.wood);
-    const wn = parseNum(f.w);
-    const hn = parseNum(f.h);
-    if (!product || isNaN(wn) || !hn) return;
-
-    const m2 = wn * hn;
-    const minM2 = type === 'mesa' ? 1.6 : null;
-    const billableM2 = minM2 && m2 < minM2 ? minM2 : m2;
-    
-    const calcPrice = type === 'mesa' 
-      ? product.pricePerM2 * billableM2 
-      : product.pricePerM2 * m2;
-    
     const overrideVal = type === 'mesa' ? budgetMesaOverride.value : budgetCircularOverride.value;
+
+    let f: any;
+    let calcPrice: number;
+    let detail: string;
+    let dimsProps: any;
+
+    if (type === 'mesa') {
+      f = mesaForm;
+      const product = dataList.find(t => t.name === f.wood);
+      const wn = parseNum(f.w);
+      const hn = parseNum(f.h);
+      if (!product || isNaN(wn) || !hn) return;
+
+      const m2 = wn * hn;
+      const minM2 = 1.6;
+      const billableM2 = m2 < minM2 ? minM2 : m2;
+      calcPrice = product.pricePerM2 * billableM2;
+
+      detail = `${wn}m × ${hn}m = ${m2.toFixed(2)}m² · Base: ${f.base}`;
+      if (m2 < minM2) detail += ` (Minimo facturado ${minM2}m²)`;
+      dimsProps = { w: wn, h: hn };
+    } else {
+      f = circularForm;
+      const product = dataList.find(t => t.name === f.wood);
+      const diametroCm = parseNum(f.diametro);
+      if (!product || isNaN(diametroCm) || diametroCm <= 0) return;
+
+      calcPrice = product.pricePerM2 * (diametroCm / 100);
+      detail = `Ø${diametroCm}cm · Base: ${f.base}`;
+      dimsProps = { diametro: diametroCm };
+    }
+
     const price = overrideVal !== null ? overrideVal : calcPrice;
     if (!price) return;
 
     const isMicro = f.wood === 'Microcemento';
     const qty = parseInt((document.getElementById(`${type === 'mesa' ? 'm' : 'c'}-qty`) as HTMLInputElement)?.value) || 1;
 
-    let detail = `${wn}m × ${hn}m = ${m2.toFixed(2)}m² · Base: ${f.base}`;
-    if (minM2 && m2 < minM2) detail += ` (Minimo facturado ${minM2}m²)`;
     if (isMicro) detail += ` · Color: ${f.color} · Vet: ${f.veteado} · Brillo: ${f.brillo}`;
 
     const newItem = {
@@ -1359,15 +1406,14 @@ export default function App() {
       qty,
       category: type === 'mesa' ? 'Mesas' : 'Mesas Circulares',
       wood: f.wood,
-      w: wn,
-      h: hn
+      ...dimsProps
     };
 
     setQuoteItems([...quoteItems, newItem]);
     if (type === 'mesa') {
       setMesaForm({ wood: '', w: '', h: '', base: '', color: '', veteado: '', brillo: '' });
     } else {
-      setCircularForm({ wood: '', w: '', h: '', base: '', color: '', veteado: '', brillo: '' });
+      setCircularForm({ wood: '', diametro: '', base: '', color: '', veteado: '', brillo: '' });
     }
   };
 
@@ -2060,7 +2106,25 @@ export default function App() {
           const fabricStr = it.fabric || 'Pana';
           key = `${variantName} (${woodStr} · ${fabricStr})`;
           details = `${woodStr} · ${fabricStr}`;
-        } else if (itemCat === 'Mesas' || itemCat === 'Mesas Circulares' || itemCat === 'Ratonas') {
+        } else if (itemCat === 'Mesas Circulares') {
+          let dims = '';
+          if (it.diametro) {
+            dims = `Ø${it.diametro}cm`;
+          } else {
+            const match = it.detail?.match(/Ø\s*[\d.,]+\s*cm/);
+            dims = match ? match[0] : '';
+          }
+
+          let baseStr = '';
+          const baseMatch = it.detail?.match(/Base:\s*([^·\n]+)/i);
+          if (baseMatch) {
+            baseStr = ` · Base: ${baseMatch[1].trim()}`;
+          }
+
+          const dimsAndBase = [dims, baseStr ? baseStr.replace(' · ', '') : ''].filter(Boolean).join(' · ');
+          key = `${variantName} (${dimsAndBase || 'Estándar'})`;
+          details = dimsAndBase || 'Estándar';
+        } else if (itemCat === 'Mesas' || itemCat === 'Ratonas') {
           let dims = '';
           if (it.w && it.h) {
             dims = `${it.w}m × ${it.h}m`;
@@ -2068,7 +2132,7 @@ export default function App() {
             const match = it.detail?.match(/([\d.,]+m\s*×\s*[\d.,]+m)/);
             dims = match ? match[1] : '';
           }
-          
+
           let baseStr = '';
           const baseMatch = it.detail?.match(/Base:\s*([^·\n]+)/i);
           if (baseMatch) {
@@ -2614,7 +2678,7 @@ export default function App() {
                             <label className="text-[10px] tracking-wider uppercase text-stone font-bold">Tipo de madera</label>
                             <select 
                               value={circularForm.wood} 
-                              onChange={e => setCircularForm({ wood: e.target.value, w: '', h: '', base: '', color: '', veteado: '', brillo: '' })}
+                              onChange={e => setCircularForm({ wood: e.target.value, diametro: '', base: '', color: '', veteado: '', brillo: '' })}
                             >
                               <option value="">Seleccionar madera...</option>
                               {catalog.circular.map(t => <option key={t.name} value={t.name}>{t.name} &mdash; {fmt(t.pricePerM2)}/m²</option>)}
@@ -2666,14 +2730,12 @@ export default function App() {
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
                           <div className="flex flex-col gap-1.5">
-                            <label className="text-[10px] tracking-wider uppercase text-stone font-bold">Medidas (Diámetro x Diámetro)</label>
+                            <label className="text-[10px] tracking-wider uppercase text-stone font-bold">Diámetro (cm)</label>
                             <div className="flex items-center gap-2">
-                              <input type="text" placeholder="Ancho" value={circularForm.w} onChange={e => setCircularForm({ ...circularForm, w: e.target.value })} className="w-24 text-center" />
-                              <span className="text-stone">×</span>
-                              <input type="text" placeholder="Largo" value={circularForm.h} onChange={e => setCircularForm({ ...circularForm, h: e.target.value })} className="w-24 text-center" />
-                              {parseNum(circularForm.w) > 0 && parseNum(circularForm.h) > 0 && (
+                              <input type="text" placeholder="Diámetro" value={circularForm.diametro} onChange={e => setCircularForm({ ...circularForm, diametro: e.target.value })} className="w-24 text-center" />
+                              {parseNum(circularForm.diametro) > 0 && (
                                 <span className="text-xs text-terra font-bold ml-2">
-                                  {(parseNum(circularForm.w) * parseNum(circularForm.h)).toFixed(2)} m²
+                                  Ø {parseNum(circularForm.diametro)} cm
                                 </span>
                               )}
                             </div>
@@ -2685,12 +2747,11 @@ export default function App() {
                             <div className="text-[10px] tracking-wider uppercase text-stone font-bold mb-1">Precio Unitario</div>
                             {(() => {
                               const product = catalog.circular.find(t => t.name === circularForm.wood);
-                              const wVal = parseNum(circularForm.w);
-                              const hVal = parseNum(circularForm.h);
-                              if (!product || isNaN(wVal) || isNaN(hVal)) {
+                              const diametroCm = parseNum(circularForm.diametro);
+                              if (!product || isNaN(diametroCm) || diametroCm <= 0) {
                                 return <div className="text-xl font-serif font-bold text-terra">—</div>;
                               }
-                              const calcPrice = product.pricePerM2 * wVal * hVal;
+                              const calcPrice = product.pricePerM2 * (diametroCm / 100);
                               return renderBudgetEditablePrice(calcPrice, budgetCircularOverride, setBudgetCircularOverride);
                             })()}
                           </div>
@@ -2699,9 +2760,9 @@ export default function App() {
                               <label className="text-[10px] tracking-wider uppercase text-stone font-bold mb-1 block">Cantidad</label>
                               <input type="number" id="c-qty" min="1" defaultValue="1" className="text-center w-full" />
                             </div>
-                            <button 
+                            <button
                               onClick={() => addMesa('circular')}
-                              disabled={!circularForm.wood || !circularForm.base || isNaN(parseNum(circularForm.w)) || isNaN(parseNum(circularForm.h)) || (circularForm.wood === 'Microcemento' && (!circularForm.color || !circularForm.veteado || !circularForm.brillo))}
+                              disabled={!circularForm.wood || !circularForm.base || isNaN(parseNum(circularForm.diametro)) || parseNum(circularForm.diametro) <= 0 || (circularForm.wood === 'Microcemento' && (!circularForm.color || !circularForm.veteado || !circularForm.brillo))}
                               className="bg-brown text-cream px-6 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider hover:bg-terra active:scale-95 transition-all duration-150 disabled:opacity-40 disabled:scale-100 disabled:cursor-not-allowed mt-4"
                             >
                               + Agregar
@@ -4272,7 +4333,7 @@ export default function App() {
                             <label className="text-[10px] tracking-wider uppercase text-stone font-bold">Tipo de madera</label>
                             <select 
                               value={remitoCircularForm.wood} 
-                              onChange={e => setCircularFormRemito({ wood: e.target.value, w: '', h: '', base: '', color: '', veteado: '', brillo: '' })}
+                              onChange={e => setCircularFormRemito({ wood: e.target.value, diametro: '', base: '', color: '', veteado: '', brillo: '' })}
                               className="text-xs py-2 px-3 border border-sand rounded-md bg-white focus:outline-none focus:border-terra font-sans"
                             >
                               <option value="">Seleccionar madera...</option>
@@ -4338,14 +4399,12 @@ export default function App() {
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
                           <div className="flex flex-col gap-1.5">
-                            <label className="text-[10px] tracking-wider uppercase text-stone font-bold">Medidas (Metros)</label>
+                            <label className="text-[10px] tracking-wider uppercase text-stone font-bold">Diámetro (cm)</label>
                             <div className="flex items-center gap-2">
-                              <input type="text" placeholder="Ancho" value={remitoCircularForm.w} onChange={e => setCircularFormRemito({ ...remitoCircularForm, w: e.target.value })} className="w-24 text-center text-xs py-2 px-3 border border-sand rounded-md bg-white focus:outline-none font-sans" />
-                              <span className="text-stone">×</span>
-                              <input type="text" placeholder="Largo" value={remitoCircularForm.h} onChange={e => setCircularFormRemito({ ...remitoCircularForm, h: e.target.value })} className="w-24 text-center text-xs py-2 px-3 border border-sand rounded-md bg-white focus:outline-none font-sans" />
-                              {parseNum(remitoCircularForm.w) > 0 && parseNum(remitoCircularForm.h) > 0 && (
+                              <input type="text" placeholder="Diámetro" value={remitoCircularForm.diametro} onChange={e => setCircularFormRemito({ ...remitoCircularForm, diametro: e.target.value })} className="w-24 text-center text-xs py-2 px-3 border border-sand rounded-md bg-white focus:outline-none font-sans" />
+                              {parseNum(remitoCircularForm.diametro) > 0 && (
                                 <span className="text-xs text-terra font-bold ml-2">
-                                  {(parseNum(remitoCircularForm.w) * parseNum(remitoCircularForm.h)).toFixed(2)} m²
+                                  Ø {parseNum(remitoCircularForm.diametro)} cm
                                 </span>
                               )}
                             </div>
@@ -4357,10 +4416,8 @@ export default function App() {
                             <div className="text-[10px] tracking-wider uppercase text-stone font-bold mb-1">Precio Unitario</div>
                             {(() => {
                               const product = catalog.circular.find(t => t.name === remitoCircularForm.wood);
-                              const wVal = parseNum(remitoCircularForm.w);
-                              const hVal = parseNum(remitoCircularForm.h);
-                              const m2 = wVal * hVal;
-                              const calcPrice = product && !isNaN(m2) ? product.pricePerM2 * m2 : null;
+                              const diametroCm = parseNum(remitoCircularForm.diametro);
+                              const calcPrice = product && !isNaN(diametroCm) && diametroCm > 0 ? product.pricePerM2 * (diametroCm / 100) : null;
                               return renderRemitoEditablePrice(calcPrice, remitoCircularOverride, setRemitoCircularOverride);
                             })()}
                           </div>
@@ -4369,9 +4426,9 @@ export default function App() {
                               <label className="text-[10px] tracking-wider uppercase text-stone font-bold mb-1 block">Cantidad</label>
                               <input type="number" id="rc-qty" min="1" defaultValue="1" className="text-center w-full text-xs py-2 px-3 border border-sand rounded-md font-sans" />
                             </div>
-                            <button 
+                            <button
                               onClick={() => addMesaRemito('circular')}
-                              disabled={!remitoCircularForm.wood || !remitoCircularForm.base || isNaN(parseNum(remitoCircularForm.w)) || isNaN(parseNum(remitoCircularForm.h)) || (remitoCircularForm.wood === 'Microcemento' && (!remitoCircularForm.color || !remitoCircularForm.veteado || !remitoCircularForm.brillo))}
+                              disabled={!remitoCircularForm.wood || !remitoCircularForm.base || isNaN(parseNum(remitoCircularForm.diametro)) || parseNum(remitoCircularForm.diametro) <= 0 || (remitoCircularForm.wood === 'Microcemento' && (!remitoCircularForm.color || !remitoCircularForm.veteado || !remitoCircularForm.brillo))}
                               className="bg-brown text-cream px-6 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider hover:bg-terra active:scale-95 transition-all duration-150 disabled:opacity-40 disabled:scale-100 disabled:cursor-not-allowed mt-4"
                             >
                               + Agregar
