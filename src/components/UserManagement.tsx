@@ -174,7 +174,7 @@ export default function UserManagement({ currentUser, onLogout }: UserManagement
     }
 
     const newInvite: Invitation = {
-      id: 'invite-' + Date.now(),
+      id: code,
       name: inviteName.trim(),
       email: inviteEmail.trim().toLowerCase(),
       code,
