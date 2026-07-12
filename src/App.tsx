@@ -3146,29 +3146,6 @@ export default function App() {
 
                   {viewCosts && (
                     <div className="flex flex-col gap-4">
-                      <div className="bg-light-cream/50 rounded-lg p-3 border border-sand/60 flex flex-col gap-2">
-                        <div className="text-[10px] text-stone font-bold uppercase tracking-wider">Márgenes de Costo Predeterminados</div>
-                        <div className="flex items-center gap-3">
-                          <input 
-                            type="range" 
-                            min="20" 
-                            max="80" 
-                            value={defaultMarginPercent} 
-                            onChange={e => {
-                              setDefaultMarginPercent(parseInt(e.target.value));
-                              setCustomCosts({}); // reset overrides on global change
-                            }}
-                            className="flex-1 accent-terra cursor-pointer"
-                          />
-                          <span className="text-xs font-bold text-terra w-12 text-right">
-                            {defaultMarginPercent}% Costo
-                          </span>
-                        </div>
-                        <p className="text-[10px] text-stone italic">
-                          Por defecto se estima que el costo del producto es el {defaultMarginPercent}% del precio de venta (ganancia del {100 - defaultMarginPercent}%). Podés editar el costo de cada ítem de forma independiente en la planilla de abajo.
-                        </p>
-                      </div>
-
                       {/* Google Sheet lookalike table */}
                       <div className="overflow-x-auto border border-sand rounded-lg">
                         <table className="w-full text-xs text-left bg-white">
@@ -3177,7 +3154,7 @@ export default function App() {
                               <th className="p-2 label">Item</th>
                               <th className="p-2 label">Venta Unit</th>
                               <th className="p-2 label text-center">Costo Unit (Editable)</th>
-                              <th className="p-2 label text-right">Ganancia</th>
+                              <th className="p-2.5 label text-right min-w-[100px]">Ganancia</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -3211,9 +3188,9 @@ export default function App() {
                                       />
                                     </div>
                                   </td>
-                                  <td className="p-2 text-right">
+                                  <td className="p-2.5 text-right whitespace-nowrap min-w-[100px]">
                                     <div className="font-bold text-emerald-700">{fmt(profit)}</div>
-                                    <div className="text-[9px] text-stone">{margin.toFixed(0)}% marg.</div>
+                                    <div className="text-[10px] text-stone mt-0.5">{margin.toFixed(0)}% marg.</div>
                                   </td>
                                 </tr>
                               );
@@ -3255,7 +3232,7 @@ export default function App() {
                               <div>
                                 <div className="text-[9px] uppercase text-stone font-semibold mb-0.5">Ganancia neta</div>
                                 <div className="font-serif font-bold text-emerald-700 text-sm">{fmt(actualProfitValue)}</div>
-                                <div className="text-[9px] text-emerald-800 font-semibold">{actualMarginPercent.toFixed(0)}% marg.</div>
+                                <div className="text-[10px] text-emerald-800 font-semibold mt-0.5">{actualMarginPercent.toFixed(0)}% marg.</div>
                               </div>
                             </div>
                           </div>
