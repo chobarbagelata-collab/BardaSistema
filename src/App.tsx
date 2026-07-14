@@ -1324,7 +1324,7 @@ export default function App() {
     if (!budgetDate || !deliveryDays) return '—';
     const date = new Date(budgetDate + 'T12:00:00');
     date.setDate(date.getDate() + parseInt(String(deliveryDays)));
-    return date.toLocaleDateString('es-AR', { day: '2-digit', month: 'long', year: 'numeric' });
+    return date.toLocaleDateString('es-AR', { day: '2-digit', month: 'short', year: 'numeric' });
   };
 
   // Add Item actions
@@ -1480,6 +1480,10 @@ export default function App() {
       date: budgetDate,
       client: { ...cliente },
       itemsCount: quoteItems.reduce((acc, it) => acc + it.qty, 0),
+      subtotal: subtotalPrice,
+      discountType,
+      discountValue,
+      discountAmount,
       totalValue: finalBudgetValue,
       paymentMethod: pagosData[selectedPago]?.name || ''
     };
@@ -1497,6 +1501,10 @@ export default function App() {
       date: budgetDate,
       client: { ...cliente },
       itemsCount: quoteItems.reduce((acc, it) => acc + it.qty, 0),
+      subtotal: subtotalPrice,
+      discountType,
+      discountValue,
+      discountAmount,
       totalValue: finalBudgetValue,
       paymentMethod: pagosData[selectedPago]?.name || ''
     };
@@ -1658,6 +1666,7 @@ export default function App() {
     setQuoteItems([]);
     setCliente({ nombre: '', telefono: '', cuit: '', direccion: '', cp: '', ciudad: '', provincia: '' });
     setSelectedPago(0);
+    setDiscountType('%');
     setDiscountValue(0);
     setFinalPrice(null);
     setCustomCosts({});
@@ -3021,6 +3030,48 @@ export default function App() {
                   )}
                 </div>
 
+                {/* Commercial Discount Control */}
+                {quoteItems.length > 0 && (
+                  <div className="flex flex-col gap-1.5 border-t border-sand pt-4">
+                    <label className="text-[10px] uppercase font-bold text-stone">Descuento Comercial</label>
+                    <div className="flex items-center gap-3 bg-light-cream/40 border border-sand p-2 rounded-lg">
+                      <div className="flex gap-1.5">
+                        <button
+                          type="button"
+                          disabled={!canEditPresupuestos}
+                          onClick={() => setDiscountType('%')}
+                          className={`px-3 py-1 text-xs font-bold rounded disabled:opacity-50 ${discountType === '%' ? 'bg-brown text-cream' : 'bg-white text-stone border border-sand/60'}`}
+                        >
+                          %
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!canEditPresupuestos}
+                          onClick={() => setDiscountType('$')}
+                          className={`px-3 py-1 text-xs font-bold rounded disabled:opacity-50 ${discountType === '$' ? 'bg-brown text-cream' : 'bg-white text-stone border border-sand/60'}`}
+                        >
+                          $
+                        </button>
+                      </div>
+                      <div className="flex-1 flex items-center justify-end gap-1">
+                        {discountType === '$' && <span className="text-stone text-xs">$</span>}
+                        <input
+                          type="number"
+                          disabled={!canEditPresupuestos}
+                          value={discountValue || ''}
+                          placeholder="0"
+                          onChange={e => {
+                            const raw = Math.max(0, parseFloat(e.target.value) || 0);
+                            setDiscountValue(discountType === '%' ? Math.min(100, raw) : raw);
+                          }}
+                          className="w-24 text-right py-1 px-1.5 border border-sand rounded text-xs disabled:opacity-50"
+                        />
+                        {discountType === '%' && <span className="text-stone text-xs">%</span>}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Standard Client Totals Box */}
                 {quoteItems.length > 0 && (
                   <div className="border-t border-sand pt-4 flex flex-col gap-2">
@@ -3099,7 +3150,7 @@ export default function App() {
                                   <span className="text-[10px] text-stone font-medium">({Math.abs(Math.round(recargo * 100))}% de Descuento)</span>
                                 )}
                               </div>
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-baseline gap-2">
                                 {recargo !== 0 && (
                                   <span className="line-through text-stone/50 text-xs font-semibold">
                                     {fmt(finalBudgetValue)}
@@ -3137,7 +3188,8 @@ export default function App() {
                       className="flex items-center gap-2 text-brown hover:text-terra font-serif text-base font-bold outline-none"
                     >
                       {viewCosts ? <ChevronUp className="w-4 h-4 text-terra" /> : <ChevronDown className="w-4 h-4 text-terra" />}
-                      Costos y Rentabilidad 📊
+                      Costos y Rentabilidad
+                      <span className="text-terra font-bold text-sm">$</span>
                     </button>
                     <span className="text-[10px] bg-terra/10 text-terra font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
                       Privado
@@ -3151,9 +3203,9 @@ export default function App() {
                         <table className="w-full text-xs text-left bg-white">
                           <thead>
                             <tr className="bg-light-cream border-b border-sand">
-                              <th className="p-2 label">Item</th>
-                              <th className="p-2 label">Venta Unit</th>
-                              <th className="p-2 label text-center">Costo Unit (Editable)</th>
+                              <th className="p-2 label whitespace-nowrap min-w-[140px]">Item</th>
+                              <th className="p-2 label whitespace-nowrap min-w-[90px]">Venta Unit</th>
+                              <th className="p-2 label text-center whitespace-nowrap min-w-[130px]">Costo Unit (Editable)</th>
                               <th className="p-2.5 label text-right min-w-[100px]">Ganancia</th>
                             </tr>
                           </thead>
@@ -3163,13 +3215,14 @@ export default function App() {
                               const finalUnitPrice = Math.round(it.unitPrice * (1 + recargo));
                               const uCost = getUnitCost(it);
                               const profit = (finalUnitPrice - uCost) * it.qty;
-                              const margin = finalUnitPrice > 0 ? ((finalUnitPrice - uCost) / finalUnitPrice) * 100 : 0;
+                              const marginBasePrice = recargo < 0 ? it.unitPrice : finalUnitPrice;
+                              const margin = marginBasePrice > 0 ? ((marginBasePrice - uCost) / marginBasePrice) * 100 : 0;
                               return (
                                 <tr key={it.id} className="border-b border-sand/40 hover:bg-light-cream/30">
-                                  <td className="p-2 font-semibold">
+                                  <td className="p-2 font-semibold whitespace-nowrap">
                                     {it.name} <span className="text-stone">x{it.qty}</span>
                                   </td>
-                                  <td className="p-2 text-stone">
+                                  <td className="p-2 text-stone whitespace-nowrap">
                                     {fmt(finalUnitPrice)}
                                     {recargo !== 0 && (
                                       <div className="text-[9px] text-stone/40 line-through font-normal">
@@ -3205,7 +3258,8 @@ export default function App() {
                         const actualVentaTotal = Math.round(finalBudgetValue * (1 + recargo));
                         const actualCostoTotal = totalCostValue;
                         const actualProfitValue = Math.max(0, actualVentaTotal - actualCostoTotal);
-                        const actualMarginPercent = actualVentaTotal > 0 ? (actualProfitValue / actualVentaTotal) * 100 : 0;
+                        const marginBaseTotal = recargo < 0 ? finalBudgetValue : actualVentaTotal;
+                        const actualMarginPercent = marginBaseTotal > 0 ? ((marginBaseTotal - actualCostoTotal) / marginBaseTotal) * 100 : 0;
 
                         return (
                           <div className="bg-emerald-50/50 border border-emerald-600/25 rounded-xl p-4 flex flex-col gap-2.5">
@@ -3249,27 +3303,27 @@ export default function App() {
                   <h3 className="font-serif text-lg font-bold text-brown mb-4 border-b border-sand pb-2">Fecha de Entrega</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div className="flex flex-col gap-1.5">
-                      <label className="text-[10px] tracking-wider uppercase text-stone font-bold">Fecha del Presupuesto</label>
-                      <input 
-                        type="date" 
-                        value={budgetDate} 
+                      <label className="text-[10px] tracking-wider uppercase text-stone font-bold min-h-[2rem] flex items-end">Fecha del Presupuesto</label>
+                      <input
+                        type="date"
+                        value={budgetDate}
                         onChange={e => setBudgetDate(e.target.value)}
                         className="w-full text-xs py-2 px-3 border border-sand rounded-lg bg-white focus:outline-none focus:border-terra font-sans"
                       />
                     </div>
                     <div className="flex flex-col gap-1.5">
-                      <label className="text-[10px] tracking-wider uppercase text-stone font-bold">Días de Plazo</label>
-                      <input 
-                        type="number" 
-                        placeholder="ej. 30" 
-                        value={deliveryDays || ''} 
+                      <label className="text-[10px] tracking-wider uppercase text-stone font-bold min-h-[2rem] flex items-end">Días de Plazo</label>
+                      <input
+                        type="number"
+                        placeholder="ej. 30"
+                        value={deliveryDays || ''}
                         onChange={e => setDeliveryDays(parseInt(e.target.value) || 0)}
                         className="w-full text-xs py-2 px-3 border border-sand rounded-lg bg-white focus:outline-none focus:border-terra font-sans"
                       />
                     </div>
                     <div className="flex flex-col gap-1.5">
-                      <label className="text-[10px] tracking-wider uppercase text-stone font-bold">Fecha Estimada de Entrega</label>
-                      <div className="w-full text-xs py-2 px-3 border border-sand rounded-lg bg-cream/30 font-sans text-brown font-bold flex items-center min-h-[38px]">
+                      <label className="text-[10px] tracking-wider uppercase text-stone font-bold min-h-[2rem] flex items-end">Entrega Estimada</label>
+                      <div className="w-full text-xs py-2 px-3 border border-sand rounded-lg bg-cream/30 font-sans text-brown font-bold flex items-center min-h-[38px] whitespace-nowrap">
                         {calcDeliveryDate()}
                       </div>
                     </div>
