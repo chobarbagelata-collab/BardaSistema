@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Upload, X, RefreshCw, Image as ImageIcon } from 'lucide-react';
-import { db } from '../firebase';
+import { auth, db } from '../firebase';
 import { doc, getDoc, setDoc, deleteDoc } from 'firebase/firestore';
+import { signInAnonymously } from 'firebase/auth';
 
 interface BardaLogoIconProps {
   className?: string;
@@ -43,29 +44,53 @@ const compressImage = (dataUrl: string, maxWidth = 500, maxHeight = 500): Promis
 };
 
 export const BardaLogoIcon: React.FC<BardaLogoIconProps> = ({ className = '', size = 38, interactive = false }) => {
-  const [logoSrc, setLogoSrc] = useState<string>('/barda_logo.jpg');
+  const defaultPath = `${(import.meta as any).env?.BASE_URL || '/'}barda_logo.jpg`.replace(/\/+/g, '/');
+  const [logoSrc, setLogoSrc] = useState<string>(() => {
+    return localStorage.getItem('barda_custom_logo') || defaultPath;
+  });
+  const [hasImgError, setHasImgError] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     // 1. Initial local load
     const custom = localStorage.getItem('barda_custom_logo');
-    if (custom) {
+    if (custom && custom.trim().length > 0) {
       setLogoSrc(custom);
+      setHasImgError(false);
+    } else {
+      setLogoSrc(defaultPath);
+      setHasImgError(false);
     }
 
-    // 2. Load cloud logo from Firestore
+    // 2. Load cloud logo from Firestore (works even for unauthenticated / incognito users)
     const syncCloudLogo = async () => {
       try {
         const docRef = doc(db, "barda_settings", "custom_logo");
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists() && docSnap.data()?.logoUrl) {
+        let docSnap;
+        try {
+          docSnap = await getDoc(docRef);
+        } catch (fetchErr: any) {
+          if (fetchErr?.code === 'permission-denied' && !auth.currentUser) {
+            try {
+              await signInAnonymously(auth);
+              docSnap = await getDoc(docRef);
+            } catch (anonErr) {
+              console.warn("Could not sign in anonymously to fetch custom logo:", anonErr);
+            }
+          }
+        }
+
+        if (docSnap && docSnap.exists() && docSnap.data()?.logoUrl) {
           const cloudLogo = docSnap.data().logoUrl;
-          localStorage.setItem('barda_custom_logo', cloudLogo);
-          setLogoSrc(cloudLogo);
+          if (cloudLogo && typeof cloudLogo === 'string' && cloudLogo.trim().length > 0) {
+            localStorage.setItem('barda_custom_logo', cloudLogo);
+            setLogoSrc(cloudLogo);
+            setHasImgError(false);
+          }
         }
       } catch (err) {
-        console.warn("Could not load cloud logo from Firestore:", err);
+        // Silent catch for offline or unconfigured
       }
     };
 
@@ -73,10 +98,12 @@ export const BardaLogoIcon: React.FC<BardaLogoIconProps> = ({ className = '', si
 
     const handleLogoChange = () => {
       const updated = localStorage.getItem('barda_custom_logo');
-      if (updated) {
+      if (updated && updated.trim().length > 0) {
         setLogoSrc(updated);
+        setHasImgError(false);
       } else {
-        setLogoSrc('/barda_logo.jpg');
+        setLogoSrc(defaultPath);
+        setHasImgError(false);
       }
     };
 
@@ -86,7 +113,7 @@ export const BardaLogoIcon: React.FC<BardaLogoIconProps> = ({ className = '', si
       window.removeEventListener('storage', handleLogoChange);
       window.removeEventListener('barda_logo_updated', handleLogoChange);
     };
-  }, []);
+  }, [defaultPath]);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -102,6 +129,7 @@ export const BardaLogoIcon: React.FC<BardaLogoIconProps> = ({ className = '', si
           const compressed = await compressImage(rawResult, 500, 500);
           localStorage.setItem('barda_custom_logo', compressed);
           setLogoSrc(compressed);
+          setHasImgError(false);
           window.dispatchEvent(new Event('barda_logo_updated'));
           setShowUploadModal(false);
 
@@ -122,7 +150,8 @@ export const BardaLogoIcon: React.FC<BardaLogoIconProps> = ({ className = '', si
 
   const handleResetLogo = async () => {
     localStorage.removeItem('barda_custom_logo');
-    setLogoSrc('/barda_logo.jpg');
+    setLogoSrc(defaultPath);
+    setHasImgError(false);
     window.dispatchEvent(new Event('barda_logo_updated'));
     setShowUploadModal(false);
 
@@ -136,18 +165,29 @@ export const BardaLogoIcon: React.FC<BardaLogoIconProps> = ({ className = '', si
   return (
     <>
       <div 
-        className={`relative inline-block shrink-0 ${interactive ? 'cursor-pointer group' : ''}`}
+        className={`relative inline-flex items-center justify-center shrink-0 ${interactive ? 'cursor-pointer group' : ''}`}
         onClick={interactive ? () => setShowUploadModal(true) : undefined}
         title={interactive ? 'Haz clic para cambiar el logo (Subir PNG/JPG)' : undefined}
       >
-        <img
-          src={logoSrc}
-          alt="Barda Home Logo"
-          style={{ width: size, height: size }}
-          className={`object-contain rounded-md transition-opacity ${interactive ? 'group-hover:opacity-80' : ''} ${className}`}
-          onError={() => setLogoSrc('/barda_logo.jpg')}
-          referrerPolicy="no-referrer"
-        />
+        {hasImgError ? (
+          <div 
+            className={`flex items-center justify-center bg-[#3D1F0D] text-[#FAF6F0] rounded-xl shadow-xs border border-terra/30 transition-all ${interactive ? 'group-hover:opacity-90' : ''} ${className}`}
+            style={{ width: size, height: size }}
+          >
+            <span className="font-serif font-black text-terra leading-none select-none" style={{ fontSize: size * 0.52 }}>
+              B
+            </span>
+          </div>
+        ) : (
+          <img
+            src={logoSrc}
+            alt="Barda Home Logo"
+            style={{ width: size, height: size }}
+            className={`object-contain rounded-md transition-opacity ${interactive ? 'group-hover:opacity-80' : ''} ${className}`}
+            onError={() => setHasImgError(true)}
+            referrerPolicy="no-referrer"
+          />
+        )}
         {interactive && (
           <div className="absolute inset-0 bg-brown/40 opacity-0 group-hover:opacity-100 transition-opacity rounded-md flex items-center justify-center text-white">
             <Upload className="w-4 h-4" />

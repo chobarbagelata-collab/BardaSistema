@@ -265,7 +265,7 @@ export default function AuthScreen({ onLoginSuccess }: AuthScreenProps) {
         
         {/* LOGO & HERO */}
         <div className="text-center flex flex-col items-center justify-center gap-2 pb-2">
-          <BardaLogo variant="vertical" size="xl" subtitleText="PRESUPUESTOS Y VENTAS" />
+          <BardaLogo variant="vertical" size="xl" subtitleText="PRESUPUESTOS Y VENTAS" interactive={false} />
           
           {isFirstRun ? (
             <div className="mt-4 p-3 bg-amber-50 border border-terra/20 rounded-xl flex items-start gap-2.5 text-left">
