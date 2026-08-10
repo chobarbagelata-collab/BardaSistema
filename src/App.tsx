@@ -2095,10 +2095,25 @@ export default function App() {
   };
 
   const deleteOrder = (id: number) => {
-    if (!confirm('¿Está seguro de que desea eliminar esta orden de pedido?')) return;
-    const updated = sales.filter(s => s.id !== id);
-    setSales(updated);
-    localStorage.setItem('barda_sales_orders', JSON.stringify(updated));
+    if (!confirm('¿Está seguro de que desea eliminar esta orden de pedido y toda su información vinculada (taller, cobros)?')) return;
+    const orderToDelete = sales.find(s => s.id === id);
+
+    // 1. Delete from sales list
+    const updatedSales = sales.filter(s => s.id !== id);
+    setSales(updatedSales);
+    localStorage.setItem('barda_sales_orders', JSON.stringify(updatedSales));
+
+    if (orderToDelete) {
+      // 2. Delete from fabrication list (fabList)
+      const updatedFabList = fabList.filter(f => f.orderNum !== orderToDelete.orderNum && f.id !== orderToDelete.id);
+      setFabList(updatedFabList);
+      localStorage.setItem('barda_fabricacion_list', JSON.stringify(updatedFabList));
+
+      // 3. Delete from payments ledger (paymentsLedger)
+      const updatedLedger = paymentsLedger.filter(p => p.orderId !== orderToDelete.id && p.orderNum !== orderToDelete.orderNum);
+      setPaymentsLedger(updatedLedger);
+      localStorage.setItem('barda_payments_ledger', JSON.stringify(updatedLedger));
+    }
   };
 
   const handleSaveEditedSale = () => {
@@ -2444,31 +2459,73 @@ export default function App() {
   // HELPER FUNCTIONS FOR WEEKLY HORIZON & FABRICATION ACTIONS
   const parseSpanishDate = (dateStr: string): Date => {
     if (!dateStr || dateStr === '—') return new Date();
-    const months: { [key: string]: number } = {
-      enero: 0, febrero: 1, marzo: 2, abril: 3, mayo: 4, junio: 5,
-      julio: 6, agosto: 7, septiembre: 8, octubre: 9, noviembre: 10, diciembre: 11
-    };
-    const parts = dateStr.toLowerCase().split(' ');
-    // Expected formats: "26 de julio de 2026" or "YYYY-MM-DD"
-    if (parts.length >= 5) { // "dd de month de yyyy"
-      const day = parseInt(parts[0]);
-      const monthName = parts[2];
-      const year = parseInt(parts[4]);
-      const month = months[monthName] ?? 0;
-      if (!isNaN(day) && !isNaN(year)) {
-        return new Date(year, month, day);
+    const str = dateStr.trim().toLowerCase();
+
+    // 1. Format: DD/MM/YYYY or DD/MM/YY (e.g. "25/08/2026 (Ago)", "25/08/2026", "25/8/2026")
+    const ddmmyyyy = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+    if (ddmmyyyy) {
+      const day = parseInt(ddmmyyyy[1], 10);
+      const month = parseInt(ddmmyyyy[2], 10) - 1;
+      let year = parseInt(ddmmyyyy[3], 10);
+      if (year < 100) year += 2000;
+      if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
+        return new Date(year, month, day, 12, 0, 0);
       }
     }
+
+    // 2. Format: YYYY-MM-DD (e.g. "2026-08-25")
+    const yyyymmdd = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (yyyymmdd) {
+      const year = parseInt(yyyymmdd[1], 10);
+      const month = parseInt(yyyymmdd[2], 10) - 1;
+      const day = parseInt(yyyymmdd[3], 10);
+      if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
+        return new Date(year, month, day, 12, 0, 0);
+      }
+    }
+
+    // 3. Format: "26 de julio de 2026" or "26 de julio" or "26 de jul"
+    const months: { [key: string]: number } = {
+      enero: 0, ene: 0,
+      febrero: 1, feb: 1,
+      marzo: 2, mar: 2,
+      abril: 3, abr: 3,
+      mayo: 4, may: 4,
+      junio: 5, jun: 5,
+      julio: 6, jul: 6,
+      agosto: 7, ago: 7,
+      septiembre: 8, sep: 8,
+      octubre: 9, oct: 9,
+      noviembre: 10, nov: 10,
+      diciembre: 11, dic: 11
+    };
+
+    const textMatch = str.match(/(\d{1,2})\s+(?:de\s+)?([a-z]+)(?:\s+(?:de\s+)?(\d{4}))?/i);
+    if (textMatch) {
+      const day = parseInt(textMatch[1], 10);
+      const monthName = textMatch[2].toLowerCase();
+      const month = months[monthName];
+      const year = textMatch[3] ? parseInt(textMatch[3], 10) : new Date().getFullYear();
+      if (!isNaN(day) && month !== undefined && !isNaN(year)) {
+        return new Date(year, month, day, 12, 0, 0);
+      }
+    }
+
+    // 4. Fallback to JS standard Date parse
     const parsed = Date.parse(dateStr);
-    if (!isNaN(parsed)) return new Date(parsed);
+    if (!isNaN(parsed)) {
+      const dt = new Date(parsed);
+      return new Date(dt.getFullYear(), dt.getMonth(), dt.getDate(), 12, 0, 0);
+    }
+
     return new Date();
   };
 
   const getWeekRangeString = (date: Date): { label: string, weekId: string, sortKey: number } => {
-    const d = new Date(date);
-    const day = d.getDay();
-    const diff = d.getDate() - day + (day === 0 ? -6 : 1); // adjust when day is sunday
-    const monday = new Date(d.setDate(diff));
+    const d = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12, 0, 0);
+    const day = d.getDay(); // 0 is Sunday, 1 is Monday... 6 is Saturday
+    const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Monday
+    const monday = new Date(d.getFullYear(), d.getMonth(), diff, 12, 0, 0);
     
     const sunday = new Date(monday);
     sunday.setDate(monday.getDate() + 6);
@@ -2479,18 +2536,22 @@ export default function App() {
       return `${dd}/${mm}`;
     };
 
-    const getWeekNumber = (dt: Date) => {
-      const oneJan = new Date(dt.getFullYear(), 0, 1);
-      const numberOfDays = Math.floor((dt.getTime() - oneJan.getTime()) / (24 * 60 * 60 * 1000));
-      return Math.ceil((dt.getDay() + 1 + numberOfDays) / 7);
-    };
+    // Calculate ISO week number accurately
+    const target = new Date(monday.valueOf());
+    const dayNr = (monday.getDay() + 6) % 7;
+    target.setDate(target.getDate() - dayNr + 3);
+    const firstThursday = target.valueOf();
+    target.setMonth(0, 1);
+    if (target.getDay() !== 4) {
+      target.setMonth(0, 1 + ((4 - target.getDay() + 7) % 7));
+    }
+    const weekNum = 1 + Math.round((firstThursday - target.valueOf()) / 604800000);
 
-    const weekNum = getWeekNumber(monday);
     const label = `Semana ${weekNum} (del ${fmtDateStr(monday)} al ${fmtDateStr(sunday)})`;
     const weekId = `${monday.getFullYear()}-W${String(weekNum).padStart(2, '0')}`;
     
-    // Year-week sort key, e.g. 202625
-    const sortKey = monday.getFullYear() * 100 + weekNum;
+    // Sort key using Monday timestamp for perfect chronological ordering
+    const sortKey = monday.getTime();
 
     return { label, weekId, sortKey };
   };
@@ -3115,14 +3176,6 @@ export default function App() {
                 Resumen
               </button>
             )}
-            {currentUser.permissions.usuarios.view && (
-              <button 
-                onClick={() => setActiveTab('usuarios')}
-                className={`px-2 sm:px-3 md:px-4 py-1 sm:py-1.5 rounded-md text-[10px] sm:text-xs font-bold tracking-wide sm:tracking-wider uppercase transition-all duration-150 cursor-pointer ${activeTab === 'usuarios' ? 'bg-brown text-cream shadow-sm' : 'text-stone hover:bg-cream/40'}`}
-              >
-                Usuarios
-              </button>
-            )}
           </nav>
         </div>
 
@@ -3165,6 +3218,22 @@ export default function App() {
                   <UserIcon className="w-4 h-4 text-terra" />
                   <span>Mi perfil</span>
                 </button>
+
+                {currentUser.permissions.usuarios.view && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowUserMenu(false);
+                      setActiveTab('usuarios');
+                    }}
+                    className={`w-full px-3 py-2 text-xs font-semibold rounded-xl flex items-center gap-2.5 transition-colors cursor-pointer text-left ${
+                      activeTab === 'usuarios' ? 'bg-brown text-cream font-bold' : 'text-brown hover:bg-cream/50'
+                    }`}
+                  >
+                    <Users className={`w-4 h-4 ${activeTab === 'usuarios' ? 'text-cream' : 'text-terra'}`} />
+                    <span>Gestión de usuarios</span>
+                  </button>
+                )}
 
                 <div className="h-px bg-sand/60 my-0.5" />
 
@@ -6269,7 +6338,7 @@ export default function App() {
                                       {ord.items.map((it: any) => `${it.qty}x ${it.name}`).join(', ')}
                                     </div>
                                     <div className="flex justify-between items-center border-t border-sand/30 pt-1.5 mt-0.5 text-[8px] text-stone font-semibold">
-                                      <span>Plazo: {ord.deliveryDate?.replace(' de 2026', '')}</span>
+                                      <span>Plazo: {ord.deliveryDate || 'Sin fecha'}</span>
                                       <span className={`px-1.5 py-0.5 rounded font-bold uppercase text-[7px] tracking-wider ${
                                         ord.status === 'Listo' ? 'bg-emerald-100 text-emerald-800' :
                                         ord.status === 'Pendiente' ? 'bg-amber-100 text-amber-800' :
@@ -6446,7 +6515,9 @@ export default function App() {
                                   <button
                                     onClick={() => {
                                       if (confirm('¿Está seguro de que desea eliminar esta orden de fabricación del registro?')) {
-                                        setFabList(fabList.filter(item => item.id !== order.id));
+                                        const updatedFab = fabList.filter(item => item.id !== order.id);
+                                        setFabList(updatedFab);
+                                        localStorage.setItem('barda_fabricacion_list', JSON.stringify(updatedFab));
                                       }
                                     }}
                                     className="p-1.5 border border-sand text-stone hover:border-error hover:text-error hover:bg-error/5 rounded-lg transition-all"

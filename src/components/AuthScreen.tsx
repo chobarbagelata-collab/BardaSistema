@@ -12,7 +12,9 @@ import {
   setDoc, 
   getDoc, 
   collection, 
-  getDocs 
+  getDocs,
+  query,
+  where
 } from "firebase/firestore";
 import { migrateAllLocalStorageToFirestore } from '../firebaseSync';
 
@@ -130,16 +132,42 @@ export default function AuthScreen({ onLoginSuccess }: AuthScreenProps) {
         }
 
         setSuccess('Verificando código de invitación...');
-        // Read the exact invitation from Firestore using inviteCode as document ID
-        const inviteDocRef = doc(db, "barda_invitations", inviteCode.trim().toUpperCase());
+        const cleanCode = inviteCode.trim().toUpperCase();
+        let invitation: Invitation | null = null;
+
+        // 1. Try direct doc ID lookup
+        const inviteDocRef = doc(db, "barda_invitations", cleanCode);
         const inviteSnap = await getDoc(inviteDocRef);
 
-        if (!inviteSnap.exists()) {
-          setError('Código de invitación inválido, expirado o ya utilizado.');
-          return;
+        if (inviteSnap.exists()) {
+          invitation = { id: inviteSnap.id, ...inviteSnap.data() } as Invitation;
+        } else {
+          // 2. Query where field "code" equals cleanCode
+          try {
+            const q = query(collection(db, "barda_invitations"), where("code", "==", cleanCode));
+            const qSnap = await getDocs(q);
+            if (!qSnap.empty) {
+              const firstDoc = qSnap.docs[0];
+              invitation = { id: firstDoc.id, ...firstDoc.data() } as Invitation;
+            } else {
+              // 3. Fallback scan all invitations matching code case-insensitively
+              const allInvitesSnap = await getDocs(collection(db, "barda_invitations"));
+              allInvitesSnap.forEach((dSnap) => {
+                const data = dSnap.data() as Invitation;
+                if (data.code && data.code.trim().toUpperCase() === cleanCode) {
+                  invitation = { id: dSnap.id, ...data };
+                }
+              });
+            }
+          } catch (qErr) {
+            console.warn("Invitation query fallback error:", qErr);
+          }
         }
 
-        const invitation = { id: inviteSnap.id, ...inviteSnap.data() } as Invitation;
+        if (!invitation) {
+          setError('Código de invitación inválido, no encontrado o expirado. Verifique el código ingresado.');
+          return;
+        }
 
         if (invitation.status !== 'pendiente') {
           setError('Esta invitación ya ha sido utilizada o no está activa.');

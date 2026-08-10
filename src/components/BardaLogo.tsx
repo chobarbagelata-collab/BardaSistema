@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Upload, X, RefreshCw, Image as ImageIcon } from 'lucide-react';
+import { db } from '../firebase';
+import { doc, getDoc, setDoc, deleteDoc } from 'firebase/firestore';
 
 interface BardaLogoIconProps {
   className?: string;
@@ -7,16 +9,67 @@ interface BardaLogoIconProps {
   interactive?: boolean;
 }
 
+const compressImage = (dataUrl: string, maxWidth = 500, maxHeight = 500): Promise<string> => {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      let width = img.width;
+      let height = img.height;
+
+      if (width > maxWidth || height > maxHeight) {
+        if (width > height) {
+          height = Math.round((height * maxWidth) / width);
+          width = maxWidth;
+        } else {
+          width = Math.round((width * maxHeight) / height);
+          height = maxHeight;
+        }
+      }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/png', 0.9));
+      } else {
+        resolve(dataUrl);
+      }
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+};
+
 export const BardaLogoIcon: React.FC<BardaLogoIconProps> = ({ className = '', size = 38, interactive = false }) => {
   const [logoSrc, setLogoSrc] = useState<string>('/barda_logo.jpg');
   const [showUploadModal, setShowUploadModal] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    // 1. Initial local load
     const custom = localStorage.getItem('barda_custom_logo');
     if (custom) {
       setLogoSrc(custom);
     }
+
+    // 2. Load cloud logo from Firestore
+    const syncCloudLogo = async () => {
+      try {
+        const docRef = doc(db, "barda_settings", "custom_logo");
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists() && docSnap.data()?.logoUrl) {
+          const cloudLogo = docSnap.data().logoUrl;
+          localStorage.setItem('barda_custom_logo', cloudLogo);
+          setLogoSrc(cloudLogo);
+        }
+      } catch (err) {
+        console.warn("Could not load cloud logo from Firestore:", err);
+      }
+    };
+
+    syncCloudLogo();
 
     const handleLogoChange = () => {
       const updated = localStorage.getItem('barda_custom_logo');
@@ -43,24 +96,41 @@ export const BardaLogoIcon: React.FC<BardaLogoIconProps> = ({ className = '', si
         return;
       }
       const reader = new FileReader();
-      reader.onload = (event) => {
-        const result = event.target?.result as string;
-        if (result) {
-          localStorage.setItem('barda_custom_logo', result);
-          setLogoSrc(result);
+      reader.onload = async (event) => {
+        const rawResult = event.target?.result as string;
+        if (rawResult) {
+          const compressed = await compressImage(rawResult, 500, 500);
+          localStorage.setItem('barda_custom_logo', compressed);
+          setLogoSrc(compressed);
           window.dispatchEvent(new Event('barda_logo_updated'));
           setShowUploadModal(false);
+
+          // Save to Firestore so all users get the new logo
+          try {
+            await setDoc(doc(db, "barda_settings", "custom_logo"), {
+              logoUrl: compressed,
+              updatedAt: new Date().toISOString()
+            });
+          } catch (err) {
+            console.error("Error saving logo to Firestore:", err);
+          }
         }
       };
       reader.readAsDataURL(file);
     }
   };
 
-  const handleResetLogo = () => {
+  const handleResetLogo = async () => {
     localStorage.removeItem('barda_custom_logo');
     setLogoSrc('/barda_logo.jpg');
     window.dispatchEvent(new Event('barda_logo_updated'));
     setShowUploadModal(false);
+
+    try {
+      await deleteDoc(doc(db, "barda_settings", "custom_logo"));
+    } catch (err) {
+      console.error("Error deleting cloud logo from Firestore:", err);
+    }
   };
 
   return (

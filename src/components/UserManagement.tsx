@@ -166,15 +166,16 @@ export default function UserManagement({ currentUser, onLogout }: UserManagement
       return;
     }
 
-    // Generate custom code: INV-XXXX
+    // Generate custom code: INV-XXXXX
     const characters = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // exclude confusing chars like 1, 0, I, O
-    let code = 'INV-';
+    let rawCode = 'INV-';
     for (let i = 0; i < 5; i++) {
-      code += characters.charAt(Math.floor(Math.random() * characters.length));
+      rawCode += characters.charAt(Math.floor(Math.random() * characters.length));
     }
+    const code = rawCode.toUpperCase();
 
     const newInvite: Invitation = {
-      id: 'invite-' + Date.now(),
+      id: code,
       name: inviteName.trim(),
       email: inviteEmail.trim().toLowerCase(),
       code,
@@ -185,8 +186,8 @@ export default function UserManagement({ currentUser, onLogout }: UserManagement
     };
 
     try {
-      // Save invitation directly to Firestore
-      await setDoc(doc(db, "barda_invitations", newInvite.id), newInvite);
+      // Save invitation directly to Firestore using code as document ID
+      await setDoc(doc(db, "barda_invitations", code), newInvite);
       
       const updatedInvites = [...invitations, newInvite];
       setInvitations(updatedInvites);
@@ -301,11 +302,11 @@ export default function UserManagement({ currentUser, onLogout }: UserManagement
   // Delete / Revoke user access
   const handleDeleteUser = async (user: User) => {
     if (user.id === currentUser.id) {
-      alert('No puedes revocar tu propio acceso.');
+      alert('No puedes eliminar tu propia cuenta.');
       return;
     }
 
-    if (!confirm(`¿Estás seguro de revocar permanentemente el acceso a ${user.name}? Se cerrará su sesión de inmediato.`)) return;
+    if (!confirm(`¿Estás seguro de eliminar permanentemente al usuario ${user.name} (${user.email})? Se revocará inmediatamente su acceso al sistema.`)) return;
 
     try {
       // Delete user from Firestore
@@ -313,11 +314,11 @@ export default function UserManagement({ currentUser, onLogout }: UserManagement
 
       const updated = users.filter(u => u.id !== user.id);
       setUsers(updated);
-      setSuccessMsg(`Acceso revocado a ${user.name}`);
+      setSuccessMsg(`Usuario ${user.name} eliminado con éxito.`);
       setTimeout(() => setSuccessMsg(''), 3000);
     } catch (err) {
       console.error("Error revoking user access:", err);
-      setErrorMsg("Error al revocar el acceso del usuario.");
+      setErrorMsg("Error al eliminar el usuario de la base de datos.");
     }
   };
 
@@ -514,11 +515,11 @@ export default function UserManagement({ currentUser, onLogout }: UserManagement
                         {isEditingThis ? (
                           <button
                             onClick={handleSaveUserPermissions}
-                            className="p-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-[10px] font-bold uppercase tracking-wider px-3 flex items-center gap-1 transition-all"
+                            className="p-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-[10px] font-bold uppercase tracking-wider px-3 flex items-center gap-1 transition-all cursor-pointer shadow-xs"
                             title="Confirmar cambios"
                           >
                             <Check className="w-3.5 h-3.5" />
-                            Guardar
+                            <span>Guardar</span>
                           </button>
                         ) : (
                           <button
@@ -527,20 +528,22 @@ export default function UserManagement({ currentUser, onLogout }: UserManagement
                               setEditPermissions({ ...user.permissions });
                               setEditRole(user.role);
                             }}
-                            className="p-1.5 border border-sand hover:border-terra hover:text-terra text-stone rounded-lg hover:bg-white flex items-center justify-center transition-all"
-                            title="Editar permisos"
+                            className="p-1.5 px-2.5 border border-sand hover:border-terra hover:text-terra text-stone rounded-lg hover:bg-white flex items-center gap-1 text-[10px] font-bold uppercase transition-all cursor-pointer"
+                            title="Editar permisos y rol"
                           >
                             <Edit3 className="w-3.5 h-3.5" />
+                            <span>Editar</span>
                           </button>
                         )}
 
                         <button
                           disabled={isSelf}
                           onClick={() => handleDeleteUser(user)}
-                          className="p-1.5 border border-sand hover:border-error hover:text-error text-stone rounded-lg hover:bg-white flex items-center justify-center transition-all disabled:opacity-30 disabled:cursor-not-allowed"
-                          title="Revocar acceso"
+                          className="p-1.5 px-2.5 border border-sand hover:border-error hover:text-error hover:bg-error/5 text-stone rounded-lg flex items-center gap-1 text-[10px] font-bold uppercase transition-all disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                          title={isSelf ? 'No puedes eliminarte a ti mismo' : 'Eliminar usuario'}
                         >
-                          <UserX className="w-3.5 h-3.5" />
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Eliminar</span>
                         </button>
                       </div>
                     </div>
