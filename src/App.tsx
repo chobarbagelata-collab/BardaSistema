@@ -7036,6 +7036,9 @@ export default function App() {
                 setResumenMonth={setResumenMonth}
                 yearsList={yearsList}
                 MONTHS_LIST={MONTHS_LIST}
+                sales={sales}
+                paymentsLedger={paymentsLedger}
+                fixedCosts={fixedCosts}
               />
             ) : (
               <CommercialFunnelDashboard
