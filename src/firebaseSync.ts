@@ -19,8 +19,8 @@ export async function fetchFirestoreCollection(collectionName: string): Promise<
     });
     return items;
   } catch (error) {
-    console.error(`Error fetching collection ${collectionName} from Firestore:`, error);
-    throw error;
+    console.warn(`Firestore collection ${collectionName} unavailable (offline or network error):`, error);
+    return [];
   }
 }
 
@@ -32,8 +32,7 @@ export async function saveFirestoreDocument(collectionName: string, id: string, 
     const cleanData = JSON.parse(JSON.stringify(data));
     await setDoc(docRef, cleanData, { merge: true });
   } catch (error) {
-    console.error(`Error saving document in ${collectionName}/${id}:`, error);
-    throw error;
+    console.warn(`Firestore save error for ${collectionName}/${id} (operating offline):`, error);
   }
 }
 
@@ -43,8 +42,7 @@ export async function deleteFirestoreDocument(collectionName: string, id: string
     const docRef = doc(db, collectionName, String(id));
     await deleteDoc(docRef);
   } catch (error) {
-    console.error(`Error deleting document from ${collectionName}/${id}:`, error);
-    throw error;
+    console.warn(`Firestore delete error for ${collectionName}/${id} (operating offline):`, error);
   }
 }
 

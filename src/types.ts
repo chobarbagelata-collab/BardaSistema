@@ -1,3 +1,11 @@
+export interface OrderAttachment {
+  id: string;
+  name: string;
+  type: string;
+  size?: number;
+  dataUrl: string;
+}
+
 export type UserRole = 'Administrador' | 'Vendedor' | 'Taller' | 'Administrativo' | 'Personalizado';
 
 export interface Permission {
@@ -82,4 +90,12 @@ export const DEFAULT_PERMISSIONS_BY_ROLE: Record<UserRole, UserPermissions> = {
     resumen: { view: false, edit: false },
     usuarios: { view: false, edit: false },
   },
+};
+
+export const formatAbbreviatedName = (name: string): string => {
+  if (!name) return '';
+  const clean = name.trim();
+  const parts = clean.split(/\s+/);
+  const initials = parts.map(p => p.charAt(0).toUpperCase()).join('');
+  return initials;
 };

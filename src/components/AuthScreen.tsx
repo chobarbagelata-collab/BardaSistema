@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { User, UserRole, UserPermissions, DEFAULT_PERMISSIONS_BY_ROLE, Invitation } from '../types';
 import { Key, Mail, User as UserIcon, LogIn, Check, AlertCircle, ShieldAlert } from 'lucide-react';
+import { BardaLogo } from './BardaLogo';
 import { 
   createUserWithEmailAndPassword, 
   signInWithEmailAndPassword 
@@ -203,12 +204,17 @@ export default function AuthScreen({ onLoginSuccess }: AuthScreenProps) {
         }, 1000);
       }
     } catch (err: any) {
-      console.error("Authentication error:", err);
       if (err.code === 'auth/email-already-in-use') {
         setError('Este correo electrónico ya se encuentra registrado.');
-      } else if (err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') {
+      } else if (
+        err.code === 'auth/wrong-password' || 
+        err.code === 'auth/user-not-found' || 
+        err.code === 'auth/invalid-credential' ||
+        err.code === 'auth/invalid-email'
+      ) {
         setError('Correo electrónico o contraseña incorrectos.');
       } else {
+        console.error("Authentication error:", err);
         setError(err.message || 'Ocurrió un error inesperado durante la autenticación.');
       }
     }
@@ -230,9 +236,8 @@ export default function AuthScreen({ onLoginSuccess }: AuthScreenProps) {
       <div className="w-full max-w-md bg-white border border-sand rounded-2xl shadow-md p-8 flex flex-col gap-6">
         
         {/* LOGO & HERO */}
-        <div className="text-center flex flex-col gap-2">
-          <div className="font-serif text-4xl font-bold tracking-tight text-brown">Barda</div>
-          <div className="font-sans text-xs tracking-widest text-terra font-semibold uppercase">Presupuestos y Ventas</div>
+        <div className="text-center flex flex-col items-center justify-center gap-2 pb-2">
+          <BardaLogo variant="vertical" size="xl" subtitleText="PRESUPUESTOS Y VENTAS" />
           
           {isFirstRun ? (
             <div className="mt-4 p-3 bg-amber-50 border border-terra/20 rounded-xl flex items-start gap-2.5 text-left">
@@ -379,20 +384,6 @@ export default function AuthScreen({ onLoginSuccess }: AuthScreenProps) {
               </p>
             )}
 
-            <div className="text-[11px] text-stone/70 pt-1 border-t border-dashed border-sand/60">
-              ¿Eres el Administrador/Dueño y es tu primer ingreso?{' '}
-              <button
-                type="button"
-                onClick={() => {
-                  setIsFirstRun(true);
-                  setFormMode('register');
-                  setError('');
-                }}
-                className="text-brown font-bold hover:underline cursor-pointer"
-              >
-                Configurar Administrador Principal
-              </button>
-            </div>
           </div>
         )}
 

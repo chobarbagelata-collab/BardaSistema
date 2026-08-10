@@ -174,7 +174,7 @@ export default function UserManagement({ currentUser, onLogout }: UserManagement
     }
 
     const newInvite: Invitation = {
-      id: code,
+      id: 'invite-' + Date.now(),
       name: inviteName.trim(),
       email: inviteEmail.trim().toLowerCase(),
       code,
@@ -196,11 +196,29 @@ export default function UserManagement({ currentUser, onLogout }: UserManagement
       setInviteEmail('');
       setInviteRole('Vendedor');
       setInvitePermissions({ ...DEFAULT_PERMISSIONS_BY_ROLE.Vendedor });
-      setSuccessMsg(`Invitación generada con código ${code}`);
+      setSuccessMsg(`Invitación creada con código ${code}. Se abrió tu cliente de correo para enviar el email.`);
+
+      // Automatically trigger email client
+      handleSendEmail(newInvite);
     } catch (err) {
       console.error("Error creating invitation in Firestore:", err);
       setErrorMsg("No se pudo guardar la invitación en la base de datos.");
     }
+  };
+
+  // Trigger email client (mailto link)
+  const handleSendEmail = (inv: Invitation) => {
+    const subject = encodeURIComponent(`Invitación al sistema Barda - ${inv.name}`);
+    const body = encodeURIComponent(
+      `Hola ${inv.name},\n\n` +
+      `Te enviamos la invitación para acceder al sistema de gestión Barda (Presupuestos y Ventas) con el rol de ${inv.role}.\n\n` +
+      `Tu código de acceso es:\n` +
+      `Código: ${inv.code}\n\n` +
+      `Por favor ingresá a la plataforma con tu email (${inv.email}) y utilizá este código para activar tu usuario.\n\n` +
+      `Atentamente,\n` +
+      `Administración de Barda`
+    );
+    window.open(`mailto:${inv.email}?subject=${subject}&body=${body}`, '_blank');
   };
 
   // Copy invitation code/details
@@ -445,9 +463,10 @@ export default function UserManagement({ currentUser, onLogout }: UserManagement
 
               <button
                 type="submit"
-                className="w-full py-2.5 bg-brown hover:bg-terra text-cream hover:text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all mt-2 cursor-pointer shadow-sm"
+                className="w-full py-2.5 bg-brown hover:bg-terra text-cream hover:text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all mt-2 cursor-pointer shadow-sm flex items-center justify-center gap-2"
               >
-                Generar Código de Invitación
+                <Mail className="w-4 h-4 text-terra" />
+                <span>Enviar Invitación por Email</span>
               </button>
             </form>
           </div>
@@ -650,6 +669,14 @@ export default function UserManagement({ currentUser, onLogout }: UserManagement
                       </div>
 
                       <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => handleSendEmail(inv)}
+                          className="p-1.5 px-3 rounded-lg text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5 bg-terra text-white hover:bg-brown transition-all cursor-pointer shadow-xs"
+                          title="Enviar o reenviar correo de invitación"
+                        >
+                          <Mail className="w-3.5 h-3.5" />
+                          Enviar Email
+                        </button>
                         <button
                           onClick={() => handleCopyCode(inv)}
                           className={`p-1.5 px-3 rounded-lg text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5 transition-all ${
