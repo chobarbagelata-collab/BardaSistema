@@ -1929,7 +1929,8 @@ export default function App() {
       isSenaCustom: false,
       status: 'Pendiente',
       paymentStatus: 'Señado',
-      notes: ''
+      notes: '',
+      attachments: []
     });
     setShowOrderModal(true);
   };
@@ -5526,7 +5527,7 @@ export default function App() {
                         <label className="text-[10px] tracking-wider uppercase text-stone font-bold">Tipo de madera</label>
                         <select 
                           value={remitoMesaForm.wood} 
-                          onChange={e => setMesaFormRemito({ wood: e.target.value, w: '', h: '', base: '', color: '', veteado: '', brillo: '' })}
+                          onChange={e => setMesaFormRemito({ wood: e.target.value, w: '', h: '', base: '', color: '', veteado: '', brillo: '', baseMadera: '' })}
                           className="text-xs py-1.5 px-3 border border-sand rounded-lg bg-white text-brown font-sans focus:ring-1 focus:ring-terra focus:outline-none disabled:bg-sand/20 disabled:text-stone/50 disabled:cursor-not-allowed w-full font-medium shadow-xs transition-colors cursor-pointer"
                         >
                           <option value="">Seleccionar madera...</option>
@@ -5662,7 +5663,7 @@ export default function App() {
                             <label className="text-[10px] tracking-wider uppercase text-stone font-bold">Tipo de madera</label>
                             <select 
                               value={remitoCircularForm.wood} 
-                              onChange={e => setCircularFormRemito({ wood: e.target.value, w: '', h: '', base: '', color: '', veteado: '', brillo: '' })}
+                              onChange={e => setCircularFormRemito({ wood: e.target.value, w: '', h: '', base: '', color: '', veteado: '', brillo: '', baseMadera: '' })}
                               className="text-xs py-2 px-3 border border-sand rounded-md bg-white focus:outline-none focus:border-terra font-sans"
                             >
                               <option value="">Seleccionar madera...</option>
