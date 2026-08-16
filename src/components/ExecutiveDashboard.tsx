@@ -9,8 +9,11 @@ import {
   BarChart2,
   ShoppingBag,
   CreditCard,
-  RefreshCw
+  RefreshCw,
+  ExternalLink
 } from 'lucide-react';
+import { DashboardModals, DashboardModalType } from './DashboardModals';
+import { BusinessHealth } from './BusinessHealth';
 
 interface ExecutiveDashboardProps {
   fmt: (val: number) => string;
@@ -60,6 +63,7 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
   fixedCosts = []
 }) => {
   const [selectedPeriod, setSelectedPeriod] = useState<'3M' | '6M' | '1Y'>('6M');
+  const [activeModal, setActiveModal] = useState<DashboardModalType | null>(null);
 
   // Active year for evolution chart
   const currentYearStr = new Date().getFullYear().toString();
@@ -346,73 +350,128 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
         </div>
       </div>
 
-      {/* 2. TOP METRICS ROW (KPI CARDS - REAL DATA) */}
+      {/* 2. ESTADO DE SALUD DEL NEGOCIO (IA & MÉTRICAS) */}
+      <BusinessHealth
+        fmt={fmt}
+        totalVentas={totalVentas}
+        cantidadVentas={cantidadVentas}
+        ventaPromedio={ventaPromedio}
+        totalCostoVentas={totalCostoVentas}
+        totalGastosFijos={totalGastosFijos}
+        resultadoNeto={resultadoNeto}
+        totalDisponible={totalDisponible}
+        cashTotal={cashTotal}
+        bankTotal={bankTotal}
+        totalVentasACobrar={totalVentasACobrar}
+        agingReceivables={agingReceivables}
+        totalComprasAPagar={totalComprasAPagar}
+        agingPayables={agingPayables}
+        periodLabel={`${MONTHS_LIST.find(m => m.value === resumenMonth)?.label || 'Todos los meses'} ${resumenYear === 'todos' ? '(Histórico)' : resumenYear}`}
+      />
+
+      {/* 3. TOP METRICS ROW (KPI CARDS - REAL DATA) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* VENTAS CREADAS */}
-        <div className="bg-white border border-sand p-4 sm:p-5 rounded-2xl shadow-xs hover:shadow-sm transition-all">
+        <div
+          onClick={() => setActiveModal('ventas_creadas')}
+          className="bg-white border border-sand p-4 sm:p-5 rounded-2xl shadow-xs hover:shadow-md hover:border-terra/60 transition-all cursor-pointer group relative overflow-hidden"
+          title="Haga clic para ver el detalle de pedidos y ventas"
+        >
           <div className="flex items-center justify-between text-[11px] font-bold text-stone uppercase tracking-wider mb-2">
             <span>Ventas Creadas</span>
-            <span className="p-1.5 bg-emerald-50 text-emerald-700 rounded-lg">
+            <span className="p-1.5 bg-emerald-50 text-emerald-700 rounded-lg group-hover:bg-emerald-600 group-hover:text-white transition-colors">
               <ArrowUpRight className="w-3.5 h-3.5" />
             </span>
           </div>
-          <div className="text-2xl sm:text-3xl font-serif font-bold text-brown">
+          <div className="text-2xl sm:text-3xl font-serif font-bold text-brown group-hover:text-terra transition-colors">
             {fmt(totalVentas)}
           </div>
-          <div className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-700 mt-2">
-            <span>Real acumulado</span>
-            <span className="text-stone/70 font-normal">en periodo</span>
+          <div className="flex items-center justify-between text-[11px] font-semibold text-emerald-700 mt-2">
+            <div className="flex items-center gap-1.5">
+              <span>Real acumulado</span>
+              <span className="text-stone/70 font-normal">en periodo</span>
+            </div>
+            <span className="text-[10px] text-terra opacity-0 group-hover:opacity-100 font-bold transition-opacity flex items-center gap-0.5">
+              Ver detalle ↗
+            </span>
           </div>
         </div>
 
         {/* VENTA PROMEDIO */}
-        <div className="bg-white border border-sand p-4 sm:p-5 rounded-2xl shadow-xs hover:shadow-sm transition-all">
+        <div
+          onClick={() => setActiveModal('venta_promedio')}
+          className="bg-white border border-sand p-4 sm:p-5 rounded-2xl shadow-xs hover:shadow-md hover:border-terra/60 transition-all cursor-pointer group relative overflow-hidden"
+          title="Haga clic para ver análisis de ticket y distribución"
+        >
           <div className="flex items-center justify-between text-[11px] font-bold text-stone uppercase tracking-wider mb-2">
             <span>Venta Promedio</span>
-            <span className="p-1.5 bg-terra/10 text-terra rounded-lg">
+            <span className="p-1.5 bg-terra/10 text-terra rounded-lg group-hover:bg-terra group-hover:text-white transition-colors">
               <TrendingUp className="w-3.5 h-3.5" />
             </span>
           </div>
-          <div className="text-2xl sm:text-3xl font-serif font-bold text-brown">
+          <div className="text-2xl sm:text-3xl font-serif font-bold text-brown group-hover:text-terra transition-colors">
             {fmt(ventaPromedio)}
           </div>
-          <div className="flex items-center gap-1.5 text-[11px] font-semibold text-terra mt-2">
-            <span>Ticket medio</span>
-            <span className="text-stone/70 font-normal">por pedido</span>
+          <div className="flex items-center justify-between text-[11px] font-semibold text-terra mt-2">
+            <div className="flex items-center gap-1.5">
+              <span>Ticket medio</span>
+              <span className="text-stone/70 font-normal">por pedido</span>
+            </div>
+            <span className="text-[10px] text-terra opacity-0 group-hover:opacity-100 font-bold transition-opacity flex items-center gap-0.5">
+              Ver detalle ↗
+            </span>
           </div>
         </div>
 
         {/* CANTIDAD DE VENTAS */}
-        <div className="bg-white border border-sand p-4 sm:p-5 rounded-2xl shadow-xs hover:shadow-sm transition-all">
+        <div
+          onClick={() => setActiveModal('cantidad_ventas')}
+          className="bg-white border border-sand p-4 sm:p-5 rounded-2xl shadow-xs hover:shadow-md hover:border-terra/60 transition-all cursor-pointer group relative overflow-hidden"
+          title="Haga clic para ver desglose de órdenes y estados"
+        >
           <div className="flex items-center justify-between text-[11px] font-bold text-stone uppercase tracking-wider mb-2">
             <span>Cantidad de Ventas</span>
-            <span className="p-1.5 bg-cream text-brown rounded-lg">
+            <span className="p-1.5 bg-cream text-brown rounded-lg group-hover:bg-brown group-hover:text-cream transition-colors">
               <ShoppingBag className="w-3.5 h-3.5" />
             </span>
           </div>
-          <div className="text-2xl sm:text-3xl font-serif font-bold text-brown">
+          <div className="text-2xl sm:text-3xl font-serif font-bold text-brown group-hover:text-terra transition-colors">
             {cantidadVentas} <span className="text-xs font-sans font-normal text-stone">pedidos</span>
           </div>
-          <div className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-700 mt-2">
-            <span>Pedidos reales</span>
-            <span className="text-stone/70 font-normal">registrados</span>
+          <div className="flex items-center justify-between text-[11px] font-semibold text-emerald-700 mt-2">
+            <div className="flex items-center gap-1.5">
+              <span>Pedidos reales</span>
+              <span className="text-stone/70 font-normal">registrados</span>
+            </div>
+            <span className="text-[10px] text-terra opacity-0 group-hover:opacity-100 font-bold transition-opacity flex items-center gap-0.5">
+              Ver detalle ↗
+            </span>
           </div>
         </div>
 
         {/* RESULTADO NETO */}
-        <div className="bg-white border border-sand p-4 sm:p-5 rounded-2xl shadow-xs hover:shadow-sm transition-all">
+        <div
+          onClick={() => setActiveModal('resultado_estimado')}
+          className="bg-white border border-sand p-4 sm:p-5 rounded-2xl shadow-xs hover:shadow-md hover:border-terra/60 transition-all cursor-pointer group relative overflow-hidden"
+          title="Haga clic para ver el Estado de Resultados (P&L) y costos"
+        >
           <div className="flex items-center justify-between text-[11px] font-bold text-stone uppercase tracking-wider mb-2">
             <span>Resultado Estimado</span>
-            <span className="p-1.5 bg-emerald-100 text-emerald-800 rounded-lg">
+            <span className="p-1.5 bg-emerald-100 text-emerald-800 rounded-lg group-hover:bg-emerald-700 group-hover:text-white transition-colors">
               <DollarSign className="w-3.5 h-3.5" />
             </span>
           </div>
           <div className={`text-2xl sm:text-3xl font-serif font-bold ${resultadoNeto >= 0 ? 'text-emerald-800' : 'text-rose-700'}`}>
             {fmt(resultadoNeto)}
           </div>
-          <div className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-700 mt-2">
-            <span>Utilidad neta</span>
-            <span className="text-stone/70 font-normal">estimada</span>
+          <div className="flex items-center justify-between text-[11px] font-semibold text-emerald-700 mt-2">
+            <div className="flex items-center gap-1.5">
+              <span>Utilidad neta</span>
+              <span className="text-stone/70 font-normal">estimada</span>
+            </div>
+            <span className="text-[10px] text-terra opacity-0 group-hover:opacity-100 font-bold transition-opacity flex items-center gap-0.5">
+              Ver P&L ↗
+            </span>
           </div>
         </div>
       </div>
@@ -558,9 +617,13 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
 
             {/* THREE BALANCE CARDS */}
             <div className="flex flex-col gap-3 mt-4">
-              <div className="p-4 bg-sky-50/70 border border-sky-100 rounded-xl flex items-center justify-between">
+              <div
+                onClick={() => setActiveModal('tesoreria_disponible')}
+                className="p-4 bg-sky-50/70 border border-sky-100 hover:border-sky-300 hover:shadow-sm rounded-xl flex items-center justify-between cursor-pointer group transition-all"
+                title="Haga clic para ver arqueo y movimientos de tesorería"
+              >
                 <div className="flex items-center gap-3">
-                  <div className="p-2.5 bg-sky-500 text-white rounded-lg">
+                  <div className="p-2.5 bg-sky-500 text-white rounded-lg group-hover:bg-sky-600 transition-colors">
                     <DollarSign className="w-5 h-5" />
                   </div>
                   <div>
@@ -568,11 +631,18 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
                     <div className="text-xl font-serif font-bold text-sky-950">{fmt(totalDisponible)}</div>
                   </div>
                 </div>
+                <span className="text-[10px] text-sky-700 opacity-0 group-hover:opacity-100 font-bold transition-opacity">
+                  Ver ↗
+                </span>
               </div>
 
-              <div className="p-4 bg-amber-50/70 border border-amber-100 rounded-xl flex items-center justify-between">
+              <div
+                onClick={() => setActiveModal('tesoreria_cajas')}
+                className="p-4 bg-amber-50/70 border border-amber-100 hover:border-amber-300 hover:shadow-sm rounded-xl flex items-center justify-between cursor-pointer group transition-all"
+                title="Haga clic para ver movimientos de cajas en efectivo"
+              >
                 <div className="flex items-center gap-3">
-                  <div className="p-2.5 bg-amber-500 text-white rounded-lg">
+                  <div className="p-2.5 bg-amber-500 text-white rounded-lg group-hover:bg-amber-600 transition-colors">
                     <Wallet className="w-5 h-5" />
                   </div>
                   <div>
@@ -580,11 +650,18 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
                     <div className="text-lg font-serif font-bold text-amber-950">{fmt(cashTotal)}</div>
                   </div>
                 </div>
+                <span className="text-[10px] text-amber-700 opacity-0 group-hover:opacity-100 font-bold transition-opacity">
+                  Ver ↗
+                </span>
               </div>
 
-              <div className="p-4 bg-rose-50/70 border border-rose-100 rounded-xl flex items-center justify-between">
+              <div
+                onClick={() => setActiveModal('tesoreria_bancos')}
+                className="p-4 bg-rose-50/70 border border-rose-100 hover:border-rose-300 hover:shadow-sm rounded-xl flex items-center justify-between cursor-pointer group transition-all"
+                title="Haga clic para ver movimientos bancarios y Mercado Pago"
+              >
                 <div className="flex items-center gap-3">
-                  <div className="p-2.5 bg-rose-500 text-white rounded-lg">
+                  <div className="p-2.5 bg-rose-500 text-white rounded-lg group-hover:bg-rose-600 transition-colors">
                     <Building2 className="w-5 h-5" />
                   </div>
                   <div>
@@ -592,6 +669,9 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
                     <div className="text-lg font-serif font-bold text-rose-950">{fmt(bankTotal)}</div>
                   </div>
                 </div>
+                <span className="text-[10px] text-rose-700 opacity-0 group-hover:opacity-100 font-bold transition-opacity">
+                  Ver ↗
+                </span>
               </div>
             </div>
 
@@ -632,22 +712,31 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
       {/* 4. BOTTOM ROW: DEBT & RECEIVABLES BREAKDOWN (REAL DATA) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* TOTAL VENTAS A COBRAR */}
-        <div className="bg-white border border-sand p-5 sm:p-6 rounded-2xl shadow-xs">
+        <div
+          onClick={() => setActiveModal('ventas_a_cobrar')}
+          className="bg-white border border-sand p-5 sm:p-6 rounded-2xl shadow-xs hover:shadow-md hover:border-emerald-500/50 transition-all cursor-pointer group"
+          title="Haga clic para ver el detalle de cuentas por cobrar y deudores"
+        >
           <div className="flex items-center justify-between pb-4 border-b border-sand/60">
             <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-emerald-50 text-emerald-700 rounded-xl border border-emerald-200">
+              <div className="p-2.5 bg-emerald-50 text-emerald-700 rounded-xl border border-emerald-200 group-hover:bg-emerald-600 group-hover:text-white transition-colors">
                 <BarChart2 className="w-5 h-5" />
               </div>
               <div>
                 <div className="text-[10px] font-bold uppercase tracking-wider text-stone">Total Ventas a Cobrar</div>
-                <div className="text-2xl font-serif font-bold text-emerald-800">
+                <div className="text-2xl font-serif font-bold text-emerald-800 group-hover:text-emerald-950 transition-colors">
                   {fmt(totalVentasACobrar)}
                 </div>
               </div>
             </div>
-            <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg">
-              Cuentas por Cobrar
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg">
+                Cuentas por Cobrar
+              </span>
+              <span className="text-xs text-terra font-bold opacity-0 group-hover:opacity-100 transition-opacity">
+                Ver detalle ↗
+              </span>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 mt-5 items-center">
@@ -669,7 +758,7 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
                     </div>
                     <div
                       style={{ height: `${item.value > 0 ? heightPct : 6}%` }}
-                      className={`w-full rounded-t transition-all cursor-pointer ${item.value > 0 ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-sand/40'}`}
+                      className={`w-full rounded-t transition-all ${item.value > 0 ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-sand/40'}`}
                     ></div>
                   </div>
                 );
@@ -703,22 +792,31 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
         </div>
 
         {/* TOTAL COMPRAS A PAGAR */}
-        <div className="bg-white border border-sand p-5 sm:p-6 rounded-2xl shadow-xs">
+        <div
+          onClick={() => setActiveModal('compras_a_pagar')}
+          className="bg-white border border-sand p-5 sm:p-6 rounded-2xl shadow-xs hover:shadow-md hover:border-rose-500/50 transition-all cursor-pointer group"
+          title="Haga clic para ver el detalle de cuentas por pagar y vencimientos"
+        >
           <div className="flex items-center justify-between pb-4 border-b border-sand/60">
             <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-rose-50 text-rose-700 rounded-xl border border-rose-200">
+              <div className="p-2.5 bg-rose-50 text-rose-700 rounded-xl border border-rose-200 group-hover:bg-rose-600 group-hover:text-white transition-colors">
                 <CreditCard className="w-5 h-5" />
               </div>
               <div>
                 <div className="text-[10px] font-bold uppercase tracking-wider text-stone">Total Compras a Pagar</div>
-                <div className="text-2xl font-serif font-bold text-rose-800">
+                <div className="text-2xl font-serif font-bold text-rose-800 group-hover:text-rose-950 transition-colors">
                   {fmt(totalComprasAPagar)}
                 </div>
               </div>
             </div>
-            <span className="text-[11px] font-bold text-rose-700 bg-rose-50 px-2.5 py-1 rounded-lg">
-              Cuentas por Pagar
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-bold text-rose-700 bg-rose-50 px-2.5 py-1 rounded-lg">
+                Cuentas por Pagar
+              </span>
+              <span className="text-xs text-terra font-bold opacity-0 group-hover:opacity-100 transition-opacity">
+                Ver detalle ↗
+              </span>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 mt-5 items-center">
@@ -739,7 +837,7 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
                     </div>
                     <div
                       style={{ height: `${item.value > 0 ? heightPct : 6}%` }}
-                      className={`w-full rounded-t transition-all cursor-pointer ${item.value > 0 ? 'bg-rose-600 hover:bg-rose-500' : 'bg-sand/40'}`}
+                      className={`w-full rounded-t transition-all ${item.value > 0 ? 'bg-rose-600 hover:bg-rose-500' : 'bg-sand/40'}`}
                     ></div>
                   </div>
                 );
@@ -771,6 +869,35 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
           </div>
         </div>
       </div>
+
+      {/* 5. INTERACTIVE DASHBOARD POPUP MODAL */}
+      <DashboardModals
+        modalType={activeModal}
+        onClose={() => setActiveModal(null)}
+        fmt={fmt}
+        filteredSales={filteredSales}
+        allSales={sales}
+        filteredFixedCosts={filteredFixedCosts}
+        allFixedCosts={fixedCosts}
+        paymentsLedger={paymentsLedger}
+        resumenYear={resumenYear}
+        resumenMonth={resumenMonth}
+        selectedPeriod={selectedPeriod}
+        totalVentas={totalVentas}
+        ventaPromedio={ventaPromedio}
+        cantidadVentas={cantidadVentas}
+        totalCostoVentas={totalCostoVentas}
+        totalGastosFijos={totalGastosFijos}
+        resultadoNeto={resultadoNeto}
+        totalVentasACobrar={totalVentasACobrar}
+        totalComprasAPagar={totalComprasAPagar}
+        agingReceivables={agingReceivables}
+        agingPayables={agingPayables}
+        cashTotal={cashTotal}
+        bankTotal={bankTotal}
+        totalDisponible={totalDisponible}
+        MONTHS_LIST={MONTHS_LIST}
+      />
     </div>
   );
 };

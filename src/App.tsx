@@ -5,7 +5,7 @@ import {
   ChevronDown, ChevronUp, Sliders, Edit, Edit2, Tag, Eye, EyeOff, 
   CheckCircle, Clock, Package, AlertCircle, Pencil, Wrench, Layers,
   Download, BarChart2, Paperclip, Image as ImageIcon, Upload, X, File, ExternalLink, Wallet,
-  User as UserIcon, LogOut, ShieldCheck
+  User as UserIcon, LogOut, ShieldCheck, MessageSquare
 } from 'lucide-react';
 import AuthScreen from './components/AuthScreen';
 import UserManagement from './components/UserManagement';
@@ -13,6 +13,10 @@ import { BardaLogo, BardaLogoIcon } from './components/BardaLogo';
 import { ExecutiveDashboard } from './components/ExecutiveDashboard';
 import { CommercialFunnelDashboard } from './components/CommercialFunnelDashboard';
 import { PresupuestosEstadosDashboard, QuoteLogItem } from './components/PresupuestosEstadosDashboard';
+import { WhatsAppIntegrationModal } from './components/WhatsAppIntegrationModal';
+import { DashboardModals, DashboardModalType } from './components/DashboardModals';
+import { TransactionDetailModal, TransactionDetailItem } from './components/TransactionDetailModal';
+import { ParsedWhatsAppMessage } from './server/whatsappService';
 import { User, UserPermissions, DEFAULT_PERMISSIONS_BY_ROLE, formatAbbreviatedName } from './types';
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth } from "./firebase";
@@ -475,7 +479,127 @@ export default function App() {
   // User Dropdown and Profile states
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
+  const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
+  const [activeTesoreriaModal, setActiveTesoreriaModal] = useState<DashboardModalType | null>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
+
+  const handleApplyWhatsAppTransaction = (parsed: ParsedWhatsAppMessage) => {
+    const currentDate = parsed.extractedData.date || new Date().toISOString().split('T')[0];
+    const currentMonth = currentDate.substring(0, 7);
+
+    if (parsed.intent === 'gasto') {
+      const amount = parsed.extractedData.amount || 0;
+      const description = parsed.extractedData.concept || 'Gasto registrado por WhatsApp';
+      const category = parsed.extractedData.category || 'Varios';
+      const account = parsed.extractedData.account || 'Efectivo';
+
+      const newExpense = {
+        id: Date.now(),
+        category,
+        description,
+        amount,
+        month: currentMonth,
+        date: currentDate,
+        account,
+        currency: 'ARS',
+        iva: '0',
+        pendingPayment: false,
+        source: 'WhatsApp'
+      };
+
+      setFixedCosts(prev => [newExpense, ...prev]);
+    } else if (parsed.intent === 'ingreso' || parsed.intent === 'cobro_pedido') {
+      const amount = parsed.extractedData.amount || 0;
+      const account = parsed.extractedData.account || 'Efectivo';
+      const clientName = parsed.extractedData.clientName || 'Cliente WhatsApp';
+      const concept = parsed.extractedData.concept || (parsed.intent === 'cobro_pedido' ? 'Cobro / Seña de Pedido' : 'Ingreso directo');
+
+      const newPayment = {
+        id: `wa-${Date.now()}`,
+        orderId: Date.now(),
+        orderNum: parsed.extractedData.orderNumber || `WA-${Math.floor(1000 + Math.random() * 9000)}`,
+        clientName,
+        type: parsed.intent === 'cobro_pedido' ? 'Seña' : 'Ingreso',
+        amount,
+        date: currentDate,
+        account,
+        currency: 'ARS',
+        iva: '0',
+        pendingPayment: false,
+        note: `Registrado por WhatsApp: ${concept}`,
+        source: 'WhatsApp'
+      };
+
+      setPaymentsLedger(prev => [newPayment, ...prev]);
+    } else if (parsed.intent === 'pedido') {
+      const total = parsed.extractedData.total || 0;
+      const sena = parsed.extractedData.sena || Math.round(total * 0.5);
+      const clientName = parsed.extractedData.clientName || 'Cliente WhatsApp';
+      const clientPhone = parsed.extractedData.clientPhone || '';
+      const newOrderNum = `PED-${Math.floor(10000 + Math.random() * 90000)}`;
+
+      const newOrder = {
+        id: Date.now(),
+        orderNum: newOrderNum,
+        date: currentDate,
+        deliveryDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        client: {
+          nombre: clientName,
+          telefono: clientPhone,
+          cuit: '',
+          direccion: '',
+          cp: '',
+          ciudad: '',
+          provincia: ''
+        },
+        category: 'WhatsApp',
+        total,
+        senaAmount: sena,
+        status: 'Pendiente',
+        paymentStatus: sena >= total ? 'Pagado' : sena > 0 ? 'Señado' : 'Pendiente',
+        paymentMethod: parsed.extractedData.account || 'Transferencia',
+        items: parsed.extractedData.items && parsed.extractedData.items.length > 0
+          ? parsed.extractedData.items.map((it, idx) => ({
+              id: Date.now() + idx,
+              name: it.name,
+              qty: it.qty,
+              unitPrice: it.price,
+              detail: 'Generado desde WhatsApp Bot'
+            }))
+          : [
+              {
+                id: Date.now(),
+                name: parsed.extractedData.concept || 'Mueble a medida',
+                qty: 1,
+                unitPrice: total,
+                detail: 'Pedido registrado vía WhatsApp'
+              }
+            ],
+        notes: parsed.extractedData.notes || 'Pedido creado automáticamente vía WhatsApp',
+        source: 'WhatsApp'
+      };
+
+      setSales(prev => [newOrder, ...prev]);
+
+      if (sena > 0) {
+        const senaPayment = {
+          id: `wa-sena-${Date.now()}`,
+          orderId: newOrder.id,
+          orderNum: newOrderNum,
+          clientName,
+          type: 'Seña',
+          amount: sena,
+          date: currentDate,
+          account: parsed.extractedData.account || 'Transferencia',
+          currency: 'ARS',
+          iva: '0',
+          pendingPayment: false,
+          note: `Seña inicial recibida vía WhatsApp para pedido ${newOrderNum}`
+        };
+        setPaymentsLedger(prev => [senaPayment, ...prev]);
+      }
+    }
+  };
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -526,6 +650,8 @@ export default function App() {
   const [tesoreriaSubTab, setTesoreriaSubTab] = useState<'resumen' | 'ingresos' | 'egresos' | 'movimientos'>('resumen');
   const [movimientosSearch, setMovimientosSearch] = useState<string>('');
   const [movimientosTypeFilter, setMovimientosTypeFilter] = useState<'todos' | 'ingresos' | 'egresos' | 'pendientes'>('todos');
+  const [selectedTransactionDetail, setSelectedTransactionDetail] = useState<TransactionDetailItem | null>(null);
+  const [ingresosSideTab, setIngresosSideTab] = useState<'pendientes' | 'recientes'>('pendientes');
   const [editingMovement, setEditingMovement] = useState<any | null>(null);
   const [editMovementForm, setEditMovementForm] = useState({
     id: '',
@@ -702,6 +828,13 @@ export default function App() {
 
   // Quote items & calculations
   const [quoteItems, setQuoteItems] = useState<any[]>([]);
+  const [editingQuoteItem, setEditingQuoteItem] = useState<{
+    id: number;
+    name: string;
+    detail: string;
+    qty: number;
+    unitPrice: number;
+  } | null>(null);
   const [selectedPago, setSelectedPago] = useState<number>(0);
   const [pagosData, setPagosData] = useState<any[]>(DEFAULT_PAGOS_DATA);
   const [discountType, setDiscountType] = useState<'%' | '$'>('%');
@@ -1397,22 +1530,39 @@ export default function App() {
     const overrideState = type === 'mesa' ? remitoMesaOverride : remitoCircularOverride;
     const setOverrideState = type === 'mesa' ? setRemitoMesaOverride : setRemitoCircularOverride;
     const product = dataList.find(t => t.name === f.wood);
-    const wn = parseNum(f.w);
-    const hn = parseNum(f.h);
-    if (!product || isNaN(wn) || !hn) return;
+    if (!product) return;
 
-    const m2 = wn * hn;
-    const minM2 = type === 'mesa' ? 1.6 : null;
-    const billableM2 = minM2 && m2 < minM2 ? minM2 : m2;
-    const calcPrice = product.pricePerM2 * billableM2;
+    let calcPrice = 0;
+    let detail = '';
+    let wn = 0;
+    let hn = 0;
+
+    if (type === 'circular') {
+      const diam = parseNum(f.w);
+      if (isNaN(diam) || diam <= 0) return;
+      calcPrice = product.pricePerM2 * diam;
+      wn = diam;
+      hn = diam;
+      detail = `Diámetro: ${diam}m · Base: ${f.base}`;
+    } else {
+      wn = parseNum(f.w);
+      hn = parseNum(f.h);
+      if (isNaN(wn) || !hn) return;
+
+      const m2 = wn * hn;
+      const minM2 = 1.6;
+      const billableM2 = m2 < minM2 ? minM2 : m2;
+      calcPrice = product.pricePerM2 * billableM2;
+      detail = `${wn}m × ${hn}m = ${m2.toFixed(2)}m² · Base: ${f.base}`;
+      if (m2 < minM2) detail += ` (Minimo facturado ${minM2}m²)`;
+    }
+
     const price = overrideState.value !== null ? overrideState.value : calcPrice;
     if (!price) return;
     
     const isMicro = f.wood === 'Microcemento';
     const qty = parseInt((document.getElementById(`r${type === 'mesa' ? 'm' : 'c'}-qty`) as HTMLInputElement)?.value) || 1;
 
-    let detail = `${wn}m × ${hn}m = ${m2.toFixed(2)}m² · Base: ${f.base}`;
-    if (minM2 && m2 < minM2) detail += ` (Minimo facturado ${minM2}m²)`;
     if (isMicro) {
       detail += ` · Color: ${f.color} · Vet: ${f.veteado} · Brillo: ${f.brillo}`;
       if (f.baseMadera) detail += ` · Base Madera: ${f.baseMadera}`;
@@ -1566,14 +1716,20 @@ export default function App() {
   };
 
   const calcSubtotal = () => quoteItems.reduce((acc, it) => acc + (it.unitPrice * it.qty), 0);
-  const calcDiscount = (sub: number) => {
-    if (!discountValue) return 0;
-    return discountType === '%' ? sub * (discountValue / 100) : discountValue;
+  const subtotalPrice = calcSubtotal();
+  const recargo = pagosData[selectedPago]?.recargo ?? 0;
+  const precioConFormaPago = Math.round(subtotalPrice * (1 + recargo));
+
+  const calcDiscount = (basePrice: number) => {
+    if (!discountValue || discountValue <= 0) return 0;
+    if (discountType === '%') {
+      return Math.round(basePrice * (discountValue / 100));
+    }
+    return Math.min(basePrice, discountValue);
   };
 
-  const subtotalPrice = calcSubtotal();
-  const discountAmount = calcDiscount(subtotalPrice);
-  const suggestedPrice = Math.max(0, subtotalPrice - discountAmount);
+  const discountAmount = calcDiscount(precioConFormaPago);
+  const suggestedPrice = Math.max(0, precioConFormaPago - discountAmount);
 
   // Totals for general checkout
   const finalBudgetValue = finalPrice !== null ? finalPrice : suggestedPrice;
@@ -1603,19 +1759,30 @@ export default function App() {
       const costProduct = list?.find((t: any) => t.name.toLowerCase() === wood.toLowerCase());
       const costPerM2 = costProduct?.pricePerM2;
       if (costPerM2) {
-        let w = item.w;
-        let h = item.h;
-        if (w === undefined || h === undefined) {
-          // Parse from detail string
-          const match = item.detail?.match(/([\d.,]+)m\s*×\s*([\d.,]+)m/);
-          w = match ? parseFloat(match[1].replace(',', '.')) : 0;
-          h = match ? parseFloat(match[2].replace(',', '.')) : 0;
-        }
-        if (w && h) {
-          const m2 = w * h;
-          const minM2 = cat === 'Mesas' ? 1.6 : cat === 'Ratonas' ? 1.4 : null;
-          const billableM2 = minM2 && m2 < minM2 ? minM2 : m2;
-          return Math.round(costPerM2 * billableM2);
+        if (cat === 'Mesas Circulares') {
+          let diam = item.w;
+          if (diam === undefined) {
+            const match = item.detail?.match(/Diámetro:\s*([\d.,]+)m/i) || item.detail?.match(/([\d.,]+)m\s*×\s*([\d.,]+)m/);
+            diam = match ? parseFloat(match[1].replace(',', '.')) : 0;
+          }
+          if (diam) {
+            return Math.round(costPerM2 * diam);
+          }
+        } else {
+          let w = item.w;
+          let h = item.h;
+          if (w === undefined || h === undefined) {
+            // Parse from detail string
+            const match = item.detail?.match(/([\d.,]+)m\s*×\s*([\d.,]+)m/);
+            w = match ? parseFloat(match[1].replace(',', '.')) : 0;
+            h = match ? parseFloat(match[2].replace(',', '.')) : 0;
+          }
+          if (w && h) {
+            const m2 = w * h;
+            const minM2 = cat === 'Mesas' ? 1.6 : cat === 'Ratonas' ? 1.4 : null;
+            const billableM2 = minM2 && m2 < minM2 ? minM2 : m2;
+            return Math.round(costPerM2 * billableM2);
+          }
         }
       }
     }
@@ -1673,17 +1840,32 @@ export default function App() {
     const f = type === 'mesa' ? mesaForm : circularForm;
     const dataList = type === 'mesa' ? catalog.tables : catalog.circular;
     const product = dataList.find(t => t.name === f.wood);
-    const wn = parseNum(f.w);
-    const hn = parseNum(f.h);
-    if (!product || isNaN(wn) || !hn) return;
+    if (!product) return;
 
-    const m2 = wn * hn;
-    const minM2 = type === 'mesa' ? 1.6 : null;
-    const billableM2 = minM2 && m2 < minM2 ? minM2 : m2;
-    
-    const calcPrice = type === 'mesa' 
-      ? product.pricePerM2 * billableM2 
-      : product.pricePerM2 * m2;
+    let calcPrice = 0;
+    let detail = '';
+    let wn = 0;
+    let hn = 0;
+
+    if (type === 'circular') {
+      const diam = parseNum(f.w);
+      if (isNaN(diam) || diam <= 0) return;
+      calcPrice = product.pricePerM2 * diam;
+      wn = diam;
+      hn = diam;
+      detail = `Diámetro: ${diam}m · Base: ${f.base}`;
+    } else {
+      wn = parseNum(f.w);
+      hn = parseNum(f.h);
+      if (isNaN(wn) || !hn) return;
+
+      const m2 = wn * hn;
+      const minM2 = 1.6;
+      const billableM2 = m2 < minM2 ? minM2 : m2;
+      calcPrice = product.pricePerM2 * billableM2;
+      detail = `${wn}m × ${hn}m = ${m2.toFixed(2)}m² · Base: ${f.base}`;
+      if (m2 < minM2) detail += ` (Minimo facturado ${minM2}m²)`;
+    }
     
     const overrideVal = type === 'mesa' ? budgetMesaOverride.value : budgetCircularOverride.value;
     const price = overrideVal !== null ? overrideVal : calcPrice;
@@ -1692,8 +1874,6 @@ export default function App() {
     const isMicro = f.wood === 'Microcemento';
     const qty = parseInt((document.getElementById(`${type === 'mesa' ? 'm' : 'c'}-qty`) as HTMLInputElement)?.value) || 1;
 
-    let detail = `${wn}m × ${hn}m = ${m2.toFixed(2)}m² · Base: ${f.base}`;
-    if (minM2 && m2 < minM2) detail += ` (Minimo facturado ${minM2}m²)`;
     if (isMicro) {
       detail += ` · Color: ${f.color} · Vet: ${f.veteado} · Brillo: ${f.brillo}`;
       if (f.baseMadera) detail += ` · Base Madera: ${f.baseMadera}`;
@@ -1772,6 +1952,30 @@ export default function App() {
 
     setQuoteItems([...quoteItems, newItem]);
     setOtroForm({ nombre: '', detalle: '', precio: '' });
+  };
+
+  const handleDeleteQuoteItem = (itemId: number) => {
+    setQuoteItems(prev => prev.filter(it => it.id !== itemId));
+  };
+
+  const handleUpdateQuoteItemQty = (itemId: number, newQty: number) => {
+    if (newQty <= 0) {
+      handleDeleteQuoteItem(itemId);
+      return;
+    }
+    setQuoteItems(prev => prev.map(it => it.id === itemId ? { ...it, qty: newQty } : it));
+  };
+
+  const handleSaveEditedQuoteItem = () => {
+    if (!editingQuoteItem) return;
+    setQuoteItems(prev => prev.map(it => it.id === editingQuoteItem.id ? {
+      ...it,
+      name: editingQuoteItem.name.trim() || it.name,
+      detail: editingQuoteItem.detail.trim(),
+      qty: Math.max(1, editingQuoteItem.qty || 1),
+      unitPrice: Math.max(0, editingQuoteItem.unitPrice || 0)
+    } : it));
+    setEditingQuoteItem(null);
   };
 
   // Budget Logging and Printing
@@ -1920,12 +2124,11 @@ export default function App() {
     }
 
     setOrderValidationAttempted(false);
-    // Open dialog with default seña as 50% of the actual paid total with payment surcharge/discount
-    const recargo = pagosData[selectedPago]?.recargo ?? 0;
-    const finalTotalWithRecargo = Math.round(finalBudgetValue * (1 + recargo));
+    // Open dialog with default seña as 50% of the actual paid total with payment surcharge/discount and commercial discount
+    const actualTotal = finalBudgetValue;
     setOrderForm({
       senaPercent: 50,
-      senaCustom: Math.round(finalTotalWithRecargo * 0.5),
+      senaCustom: Math.round(actualTotal * 0.5),
       isSenaCustom: false,
       status: 'Pendiente',
       paymentStatus: 'Señado',
@@ -1937,8 +2140,7 @@ export default function App() {
 
   const confirmOrder = () => {
     const orderNum = `PE-${String(sales.length + 1001).padStart(4, '0')}`;
-    const recargo = pagosData[selectedPago]?.recargo ?? 0;
-    const actualTotal = Math.round(finalBudgetValue * (1 + recargo));
+    const actualTotal = finalBudgetValue;
     const actualProfit = Math.max(0, actualTotal - totalCostValue);
     const senaVal = orderForm.isSenaCustom ? orderForm.senaCustom : Math.round(actualTotal * (orderForm.senaPercent / 100));
     
@@ -2250,6 +2452,43 @@ export default function App() {
       const updated = paymentsLedger.filter(p => String(p.id) !== String(item.originalId));
       setPaymentsLedger(updated);
       localStorage.setItem('barda_payments_ledger', JSON.stringify(updated));
+    }
+  };
+
+  const toggleMovementStatus = (item: any) => {
+    const origId = item.originalId || item.id;
+    if (item.isFixedCost) {
+      const updated = fixedCosts.map(c => {
+        if (String(c.id) === String(origId)) {
+          const nextPending = !c.pendingPayment;
+          return { ...c, pendingPayment: nextPending };
+        }
+        return c;
+      });
+      setFixedCosts(updated);
+      localStorage.setItem('barda_fixed_costs', JSON.stringify(updated));
+      if (selectedTransactionDetail && String(selectedTransactionDetail.originalId || selectedTransactionDetail.id) === String(origId)) {
+        setSelectedTransactionDetail({
+          ...selectedTransactionDetail,
+          estado: (!selectedTransactionDetail.estado || selectedTransactionDetail.estado === 'Pendiente') ? 'Pagado' : 'Pendiente'
+        });
+      }
+    } else if (item.isLedger) {
+      const updated = paymentsLedger.map(p => {
+        if (String(p.id) === String(origId)) {
+          const nextPending = !p.pendingPayment;
+          return { ...p, pendingPayment: nextPending };
+        }
+        return p;
+      });
+      setPaymentsLedger(updated);
+      localStorage.setItem('barda_payments_ledger', JSON.stringify(updated));
+      if (selectedTransactionDetail && String(selectedTransactionDetail.originalId || selectedTransactionDetail.id) === String(origId)) {
+        setSelectedTransactionDetail({
+          ...selectedTransactionDetail,
+          estado: (!selectedTransactionDetail.estado || selectedTransactionDetail.estado === 'Pendiente') ? 'Cobrado' : 'Pendiente'
+        });
+      }
     }
   };
 
@@ -3013,11 +3252,21 @@ export default function App() {
           details = `${woodStr} · ${fabricStr}`;
         } else if (itemCat === 'Mesas' || itemCat === 'Mesas Circulares' || itemCat === 'Ratonas') {
           let dims = '';
-          if (it.w && it.h) {
-            dims = `${it.w}m × ${it.h}m`;
-          } else {
-            const match = it.detail?.match(/([\d.,]+m\s*×\s*[\d.,]+m)/);
-            dims = match ? match[1] : '';
+          if (itemCat === 'Mesas Circulares') {
+            const diamMatch = it.detail?.match(/Diámetro:\s*([\d.,]+m)/i);
+            if (diamMatch) {
+              dims = `Ø ${diamMatch[1]}`;
+            } else if (it.w) {
+              dims = `Ø ${it.w}m`;
+            }
+          }
+          if (!dims) {
+            if (it.w && it.h) {
+              dims = `${it.w}m × ${it.h}m`;
+            } else {
+              const match = it.detail?.match(/([\d.,]+m\s*×\s*[\d.,]+m)/);
+              dims = match ? match[1] : '';
+            }
           }
           
           let baseStr = '';
@@ -3731,14 +3980,19 @@ export default function App() {
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
                           <div className="flex flex-col gap-1.5">
-                            <label className="text-[10px] tracking-wider uppercase text-stone font-bold">Medidas (Diámetro x Diámetro)</label>
+                            <label className="text-[10px] tracking-wider uppercase text-stone font-bold">Diámetro (Metros)</label>
                             <div className="flex items-center gap-2">
-                              <input type="text" placeholder="Ancho" value={circularForm.w} onChange={e => setCircularForm({ ...circularForm, w: e.target.value })} className="w-24 text-center text-xs py-1.5 px-3 border border-sand rounded-lg bg-white text-brown font-sans focus:ring-1 focus:ring-terra focus:outline-none font-medium shadow-xs" />
-                              <span className="text-stone">×</span>
-                              <input type="text" placeholder="Largo" value={circularForm.h} onChange={e => setCircularForm({ ...circularForm, h: e.target.value })} className="w-24 text-center text-xs py-1.5 px-3 border border-sand rounded-lg bg-white text-brown font-sans focus:ring-1 focus:ring-terra focus:outline-none font-medium shadow-xs" />
-                              {parseNum(circularForm.w) > 0 && parseNum(circularForm.h) > 0 && (
-                                <span className="text-xs text-terra font-bold ml-2">
-                                  {(parseNum(circularForm.w) * parseNum(circularForm.h)).toFixed(2)} m²
+                              <input 
+                                type="text" 
+                                placeholder="Ej: 1.00" 
+                                value={circularForm.w} 
+                                onChange={e => setCircularForm({ ...circularForm, w: e.target.value, h: e.target.value })} 
+                                className="w-32 text-center text-xs py-1.5 px-3 border border-sand rounded-lg bg-white text-brown font-sans focus:ring-1 focus:ring-terra focus:outline-none font-medium shadow-xs" 
+                              />
+                              <span className="text-xs text-stone font-medium">m</span>
+                              {parseNum(circularForm.w) > 0 && (
+                                <span className="text-xs text-terra font-bold ml-1">
+                                  {parseNum(circularForm.w).toFixed(2)} m de diámetro
                                 </span>
                               )}
                             </div>
@@ -3750,12 +4004,11 @@ export default function App() {
                             <div className="text-[10px] tracking-wider uppercase text-stone font-bold mb-1">Precio Unitario</div>
                             {(() => {
                               const product = catalog.circular.find(t => t.name === circularForm.wood);
-                              const wVal = parseNum(circularForm.w);
-                              const hVal = parseNum(circularForm.h);
-                              if (!product || isNaN(wVal) || isNaN(hVal)) {
+                              const diamVal = parseNum(circularForm.w);
+                              if (!product || isNaN(diamVal) || diamVal <= 0) {
                                 return <div className="text-xl font-serif font-bold text-terra">—</div>;
                               }
-                              const calcPrice = product.pricePerM2 * wVal * hVal;
+                              const calcPrice = product.pricePerM2 * diamVal;
                               return renderBudgetEditablePrice(calcPrice, budgetCircularOverride, setBudgetCircularOverride);
                             })()}
                           </div>
@@ -3766,7 +4019,7 @@ export default function App() {
                             </div>
                             <button 
                               onClick={() => addMesa('circular')}
-                              disabled={!circularForm.wood || !circularForm.base || isNaN(parseNum(circularForm.w)) || isNaN(parseNum(circularForm.h)) || (circularForm.wood === 'Microcemento' && (!circularForm.color || !circularForm.veteado || !circularForm.brillo))}
+                              disabled={!circularForm.wood || !circularForm.base || isNaN(parseNum(circularForm.w)) || parseNum(circularForm.w) <= 0 || (circularForm.wood === 'Microcemento' && (!circularForm.color || !circularForm.veteado || !circularForm.brillo))}
                               className="bg-brown text-cream px-6 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider hover:bg-terra active:scale-95 transition-all duration-150 disabled:opacity-40 disabled:scale-100 disabled:cursor-not-allowed mt-4"
                             >
                               + Agregar
@@ -3880,34 +4133,149 @@ export default function App() {
                 )}
               </div>
 
-              {/* FORMA DE PAGO CARD */}
-              <div className="bg-white border border-sand rounded-xl p-5 shadow-sm">
-                <h3 className="font-serif text-lg font-bold text-brown mb-4 border-b border-sand pb-2">Forma de Pago</h3>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  {pagosData.map((pago, index) => {
-                    const isSelected = selectedPago === index;
-                    return (
+              {/* FORMA DE PAGO & DESCUENTO COMERCIAL CARD */}
+              <div className="bg-white border border-sand rounded-xl p-5 shadow-sm flex flex-col gap-5">
+                <div>
+                  <h3 className="font-serif text-lg font-bold text-brown mb-3 border-b border-sand pb-2">Forma de Pago</h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    {pagosData.map((pago, index) => {
+                      const isSelected = selectedPago === index;
+                      return (
+                        <button
+                          key={pago.name}
+                          type="button"
+                          onClick={() => setSelectedPago(index)}
+                          className={`p-3 rounded-xl border text-left flex flex-col justify-between transition-all duration-150 cursor-pointer ${
+                            isSelected
+                              ? 'border-brown bg-cream/40 shadow-sm ring-1 ring-brown'
+                              : 'border-sand/60 hover:border-sand hover:bg-cream/10'
+                          }`}
+                        >
+                          <div className="text-xs font-bold text-brown">{pago.name}</div>
+                          <div className="text-[10px] text-stone mt-1.5 font-medium">
+                            {pago.recargo < 0 
+                              ? `${Math.abs(Math.round(pago.recargo * 100))}% de Descuento` 
+                              : pago.recargo > 0 
+                                ? `${Math.round(pago.recargo * 100)}% de Recargo` 
+                                : 'Sin Recargo'}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* SECCIÓN DESCUENTO COMERCIAL (POSTERIOR A FORMA DE PAGO) */}
+                <div className="bg-light-cream/50 border border-sand/80 rounded-xl p-4 flex flex-col gap-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-sand/50 pb-2">
+                    <div>
+                      <div className="font-serif text-sm font-bold text-brown flex items-center gap-1.5">
+                        <Tag className="w-3.5 h-3.5 text-terra" />
+                        Descuento Comercial
+                      </div>
+                      <p className="text-[11px] text-stone">
+                        Se aplica posterior a la forma de pago ({pagosData[selectedPago]?.name || 'Efectivo'}).
+                      </p>
+                    </div>
+
+                    {/* Toggle % vs $ */}
+                    <div className="inline-flex p-0.5 bg-white border border-sand rounded-lg shadow-2xs self-start sm:self-auto">
                       <button
-                        key={pago.name}
                         type="button"
-                        onClick={() => setSelectedPago(index)}
-                        className={`p-3 rounded-xl border text-left flex flex-col justify-between transition-all duration-150 cursor-pointer ${
-                          isSelected
-                            ? 'border-brown bg-cream/40 shadow-sm ring-1 ring-brown'
-                            : 'border-sand/60 hover:border-sand hover:bg-cream/10'
+                        onClick={() => setDiscountType('%')}
+                        className={`px-3 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                          discountType === '%'
+                            ? 'bg-brown text-cream shadow-xs'
+                            : 'text-stone hover:text-brown'
                         }`}
                       >
-                        <div className="text-xs font-bold text-brown">{pago.name}</div>
-                        <div className="text-[10px] text-stone mt-1.5 font-medium">
-                          {pago.recargo < 0 
-                            ? `${Math.abs(Math.round(pago.recargo * 100))}% de Descuento` 
-                            : pago.recargo > 0 
-                              ? `${Math.round(pago.recargo * 100)}% de Recargo` 
-                              : 'Sin Recargo'}
-                        </div>
+                        % Porcentaje
                       </button>
-                    );
-                  })}
+                      <button
+                        type="button"
+                        onClick={() => setDiscountType('$')}
+                        className={`px-3 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                          discountType === '$'
+                            ? 'bg-brown text-cream shadow-xs'
+                            : 'text-stone hover:text-brown'
+                        }`}
+                      >
+                        $ Monto Fijo
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-[10px] tracking-wider uppercase text-stone font-bold">
+                        {discountType === '%' ? 'Porcentaje de Descuento (%)' : 'Monto de Descuento ($)'}
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <div className="relative flex-1">
+                          <input
+                            type="number"
+                            min="0"
+                            max={discountType === '%' ? 100 : undefined}
+                            step={discountType === '%' ? 1 : 1000}
+                            placeholder={discountType === '%' ? '0' : '$ 0'}
+                            value={discountValue === 0 ? '' : discountValue}
+                            onChange={e => {
+                              const val = parseFloat(e.target.value);
+                              setDiscountValue(isNaN(val) ? 0 : Math.max(0, val));
+                            }}
+                            className="w-full text-xs py-2 px-3 border border-sand rounded-lg bg-white text-brown font-sans focus:ring-1 focus:ring-terra focus:outline-none font-bold"
+                          />
+                          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-stone">
+                            {discountType === '%' ? '%' : '$'}
+                          </span>
+                        </div>
+                        {discountValue > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setDiscountValue(0)}
+                            className="text-stone hover:text-rose-600 p-2 rounded-lg border border-sand bg-white hover:bg-rose-50 transition-colors"
+                            title="Quitar descuento comercial"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Quick percentage buttons */}
+                    {discountType === '%' && (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {[0, 5, 10, 15, 20, 25].map(pct => (
+                          <button
+                            key={pct}
+                            type="button"
+                            onClick={() => setDiscountValue(pct)}
+                            className={`px-2.5 py-1 text-[11px] font-bold rounded-lg border transition-all cursor-pointer ${
+                              discountValue === pct
+                                ? 'bg-terra text-white border-terra shadow-2xs'
+                                : 'bg-white text-stone border-sand hover:border-terra/60 hover:text-brown'
+                            }`}
+                          >
+                            {pct === 0 ? '0%' : `${pct}%`}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Real-time Summary Bar */}
+                  {discountAmount > 0 && (
+                    <div className="bg-white/90 border border-sand rounded-lg p-2.5 flex flex-wrap justify-between items-center text-xs gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-stone">Forma de pago: <strong className="text-brown">{fmt(precioConFormaPago)}</strong></span>
+                        <span className="text-stone/40">→</span>
+                        <span className="text-terra font-semibold">Descuento: -{fmt(discountAmount)}</span>
+                      </div>
+                      <div className="font-bold text-brown">
+                        Total Final: <span className="text-terra font-serif text-sm">{fmt(finalBudgetValue)}</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -3977,18 +4345,68 @@ export default function App() {
                         const finalRowTotal = Math.round(finalUnitPrice * it.qty);
 
                         return (
-                          <div key={it.id} className="border-b border-sand/30 pb-3 flex flex-col gap-1.5">
-                            <div className="flex justify-between items-start gap-4">
-                              <div>
+                          <div key={it.id} className="group border-b border-sand/30 pb-3 flex flex-col gap-1.5 transition-colors hover:bg-cream/10 rounded-lg p-1.5 -mx-1.5">
+                            <div className="flex justify-between items-start gap-3">
+                              <div className="flex-1 min-w-0">
                                 <div className="font-semibold text-xs text-brown">{it.name}</div>
                                 <div className="text-[10px] text-stone mt-0.5">{it.detail}</div>
+                              </div>
+
+                              {/* Action controls (Edit & Delete) - visible in interactive view, hidden on print */}
+                              <div className="flex items-center gap-1 shrink-0 print:hidden">
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingQuoteItem({
+                                    id: it.id,
+                                    name: it.name,
+                                    detail: it.detail || '',
+                                    qty: it.qty,
+                                    unitPrice: it.unitPrice
+                                  })}
+                                  className="p-1 text-stone hover:text-terra hover:bg-cream/70 rounded-md transition-colors cursor-pointer"
+                                  title="Modificar línea / ítem"
+                                >
+                                  <Pencil className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteQuoteItem(it.id)}
+                                  className="p-1 text-stone hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
+                                  title="Eliminar ítem"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
                               </div>
                             </div>
                             
                             {/* Quantity and unit price on left, total on right */}
                             <div className="flex justify-between items-end text-[11px] text-stone mt-0.5">
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <span>Cant: <strong className="text-brown">{it.qty}</strong></span>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <div className="flex items-center gap-1.5">
+                                  <span>Cant:</span>
+                                  {/* Quick Qty +/- controls (print:hidden) */}
+                                  <div className="inline-flex items-center border border-sand rounded-md bg-white shadow-2xs print:hidden">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleUpdateQuoteItemQty(it.id, it.qty - 1)}
+                                      className="w-4 h-4 flex items-center justify-center text-[11px] font-bold text-stone hover:text-brown hover:bg-cream/60 transition-colors"
+                                      title="Disminuir cantidad"
+                                    >
+                                      &minus;
+                                    </button>
+                                    <span className="px-1 text-xs font-bold text-brown min-w-[18px] text-center">{it.qty}</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleUpdateQuoteItemQty(it.id, it.qty + 1)}
+                                      className="w-4 h-4 flex items-center justify-center text-[11px] font-bold text-stone hover:text-brown hover:bg-cream/60 transition-colors"
+                                      title="Aumentar cantidad"
+                                    >
+                                      +
+                                    </button>
+                                  </div>
+                                  {/* Print-only static text */}
+                                  <strong className="text-brown hidden print:inline">{it.qty}</strong>
+                                </div>
                                 <span className="text-sand/50">•</span>
                                 <span>
                                   Precio unitario: {' '}
@@ -4027,25 +4445,13 @@ export default function App() {
                 {quoteItems.length > 0 && (
                   <div className="border-t border-sand pt-4 flex flex-col gap-2">
                     <div className="flex justify-between text-xs text-stone">
-                      <span>Subtotal</span>
+                      <span>Subtotal de Lista</span>
                       <span>{fmt(subtotalPrice)}</span>
                     </div>
-                    {discountAmount > 0 && (
-                      <>
-                        <div className="flex justify-between text-xs text-error font-medium">
-                          <span>Descuento aplicado</span>
-                          <span>- {fmt(discountAmount)}</span>
-                        </div>
-                        <div className="flex justify-between text-xs text-stone line-through">
-                          <span>Precio de Lista Sugerido</span>
-                          <span>{fmt(suggestedPrice)}</span>
-                        </div>
-                      </>
-                    )}
 
                     {/* Delivery Plazo Date */}
                     {calcDeliveryDate() && (
-                      <div className="flex justify-between text-[11px] text-stone mt-2">
+                      <div className="flex justify-between text-[11px] text-stone mt-1">
                         <span>Plazo de entrega estimado</span>
                         <strong className="text-brown">{calcDeliveryDate()}</strong>
                       </div>
@@ -4053,78 +4459,102 @@ export default function App() {
                   </div>
                 )}
 
-                {/* Active Payment option values (Forma de Pago) - MOVED HERE, BELOW THE BUDGET */}
+                {/* Active Payment option values (Forma de Pago & Descuento Comercial) */}
                 {quoteItems.length > 0 && (
-                  <div className="bg-cream/40 border border-sand rounded-xl p-4 flex flex-col gap-2 mt-2">
+                  <div className="bg-cream/40 border border-sand rounded-xl p-4 flex flex-col gap-2.5 mt-2">
                     {(() => {
                       const recargo = pagosData[selectedPago]?.recargo ?? 0;
                       const name = pagosData[selectedPago]?.name || '';
                       const parts = name.split(' ');
                       const cuotasCount = parseInt(parts[0]);
                       const hasCuotas = name.toLowerCase().includes('cuotas') && !isNaN(cuotasCount) && cuotasCount > 0;
+                      const hasPaymentAdjustment = recargo !== 0;
+                      const hasCommercialDiscount = discountAmount > 0;
 
-                      if (recargo > 0) {
-                        const recargoValue = Math.round(finalBudgetValue * recargo);
-                        const finalTotal = Math.round(finalBudgetValue * (1 + recargo));
-                        return (
-                          <div className="flex flex-col gap-2">
-                            <div className="font-serif text-sm font-bold text-brown border-b border-sand/40 pb-1 mb-1">
+                      return (
+                        <div className="flex flex-col gap-2">
+                          <div className="flex justify-between items-center border-b border-sand/40 pb-1.5 mb-0.5">
+                            <div className="font-serif text-sm font-bold text-brown">
                               {name}
                             </div>
-                            <div className="flex justify-between text-xs text-stone">
-                              <span>Total de Productos</span>
-                              <span>{fmt(finalBudgetValue)}</span>
-                            </div>
-                            <div className="flex justify-between text-xs text-stone">
-                              <span>Recargo ({Math.round(recargo * 100)}%)</span>
-                              <span>{fmt(recargoValue)}</span>
-                            </div>
-                            <div className="flex justify-between text-xs font-bold text-brown border-t border-sand/40 pt-1.5 mt-0.5">
-                              <span>Total Final</span>
-                              <span className="text-terra text-sm">{fmt(finalTotal)}</span>
-                            </div>
-                            {hasCuotas && (
-                              <div className="flex justify-between text-[11px] text-stone border-t border-dashed border-sand/50 pt-1.5 mt-1">
-                                <span>{cuotasCount} cuotas mensuales de</span>
-                                <strong className="text-terra">{fmt(Math.round(finalTotal / cuotasCount))}</strong>
-                              </div>
+                            {recargo < 0 && (
+                              <span className="text-[10px] bg-emerald-100/80 text-emerald-800 font-bold px-2 py-0.5 rounded-full">
+                                {Math.abs(Math.round(recargo * 100))}% de Bonificación
+                              </span>
+                            )}
+                            {recargo > 0 && (
+                              <span className="text-[10px] bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded-full">
+                                +{Math.round(recargo * 100)}% Recargo
+                              </span>
                             )}
                           </div>
-                        );
-                      } else {
-                        return (
-                          <>
-                            <div className="flex justify-between items-center">
-                              <div className="flex flex-col">
-                                <span className="font-serif text-sm font-bold text-brown">{name}</span>
-                                {recargo < 0 && (
-                                  <span className="text-[10px] text-stone font-medium">({Math.abs(Math.round(recargo * 100))}% de Descuento)</span>
-                                )}
+
+                          {/* Breakdown if adjustments exist */}
+                          {(hasPaymentAdjustment || hasCommercialDiscount) && (
+                            <div className="flex flex-col gap-1 text-xs text-stone border-b border-sand/30 pb-2">
+                              <div className="flex justify-between">
+                                <span>Subtotal de Lista</span>
+                                <span>{fmt(subtotalPrice)}</span>
                               </div>
-                              <div className="flex items-center gap-2">
-                                {recargo !== 0 && (
-                                  <span className="line-through text-stone/50 text-xs font-semibold">
-                                    {fmt(finalBudgetValue)}
+
+                              {recargo > 0 && (
+                                <div className="flex justify-between text-stone">
+                                  <span>Recargo forma de pago ({Math.round(recargo * 100)}%)</span>
+                                  <span>+{fmt(Math.round(subtotalPrice * recargo))}</span>
+                                </div>
+                              )}
+
+                              {recargo < 0 && (
+                                <div className="flex justify-between text-emerald-700 font-medium">
+                                  <span>Bonificación forma de pago ({Math.abs(Math.round(recargo * 100))}%)</span>
+                                  <span>-{fmt(Math.abs(Math.round(subtotalPrice * recargo)))}</span>
+                                </div>
+                              )}
+
+                              {hasPaymentAdjustment && hasCommercialDiscount && (
+                                <div className="flex justify-between font-medium text-stone pt-0.5">
+                                  <span>Subtotal con Forma de Pago</span>
+                                  <span>{fmt(precioConFormaPago)}</span>
+                                </div>
+                              )}
+
+                              {hasCommercialDiscount && (
+                                <div className="flex justify-between text-terra font-semibold">
+                                  <span>
+                                    Descuento Comercial {discountType === '%' ? `(${discountValue}%)` : '(Monto Fijo)'}
                                   </span>
-                                )}
-                                <span className="font-serif text-lg font-bold text-terra">
-                                  {fmt(Math.round(finalBudgetValue * (1 + recargo)))}
-                                </span>
-                              </div>
+                                  <span>-{fmt(discountAmount)}</span>
+                                </div>
+                              )}
                             </div>
-                            
-                            {/* Instalment helper if applicable */}
-                            {hasCuotas && (
-                              <div className="flex justify-between text-[11px] text-stone border-t border-sand/50 pt-1.5 mt-1">
-                                <span>{cuotasCount} cuotas mensuales de</span>
-                                <strong className="text-terra">
-                                  {fmt(Math.round((finalBudgetValue * (1 + recargo)) / cuotasCount))}
-                                </strong>
-                              </div>
-                            )}
-                          </>
-                        );
-                      }
+                          )}
+
+                          {/* Final Total Line */}
+                          <div className="flex justify-between items-baseline pt-0.5">
+                            <span className="font-serif text-sm font-bold text-brown">Total Final</span>
+                            <div className="flex items-baseline gap-2">
+                              {(hasPaymentAdjustment || hasCommercialDiscount) && subtotalPrice !== finalBudgetValue && (
+                                <span className="line-through text-stone/50 text-xs font-semibold">
+                                  {fmt(subtotalPrice)}
+                                </span>
+                              )}
+                              <span className="font-serif text-xl font-bold text-terra">
+                                {fmt(finalBudgetValue)}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Instalments row */}
+                          {hasCuotas && (
+                            <div className="flex justify-between text-[11px] text-stone border-t border-dashed border-sand/50 pt-1.5 mt-0.5">
+                              <span>{cuotasCount} cuotas mensuales fijas de</span>
+                              <strong className="text-terra text-xs">
+                                {fmt(Math.round(finalBudgetValue / cuotasCount))}
+                              </strong>
+                            </div>
+                          )}
+                        </div>
+                      );
                     })()}
                   </div>
                 )}
@@ -4227,7 +4657,7 @@ export default function App() {
                       {/* Private metrics summary card */}
                       {(() => {
                         const recargo = pagosData[selectedPago]?.recargo ?? 0;
-                        const actualVentaTotal = Math.round(finalBudgetValue * (1 + recargo));
+                        const actualVentaTotal = finalBudgetValue;
                         const actualCostoTotal = totalCostValue;
                         const actualProfitValue = Math.max(0, actualVentaTotal - actualCostoTotal);
                         const actualMarginPercent = actualVentaTotal > 0 ? (actualProfitValue / actualVentaTotal) * 100 : 0;
@@ -4243,9 +4673,9 @@ export default function App() {
                                 <div className="text-[9px] uppercase text-stone font-semibold mb-0.5">Venta total</div>
                                 <div className="font-serif font-bold text-brown text-sm">
                                   {fmt(actualVentaTotal)}
-                                  {recargo !== 0 && (
+                                  {(recargo !== 0 || discountAmount > 0) && (
                                     <div className="text-[8px] text-stone/60 font-sans font-normal">
-                                      Base: {fmt(finalBudgetValue)}
+                                      Lista: {fmt(subtotalPrice)}
                                     </div>
                                   )}
                                 </div>
@@ -4368,6 +4798,104 @@ export default function App() {
                 )}
               </div>
             </div>
+
+            {/* Modal for Modifying a Quote Line Item */}
+            {editingQuoteItem && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs animate-in fade-in duration-150 print:hidden">
+                <div className="bg-white border-2 border-sand rounded-2xl shadow-2xl max-w-lg w-full p-6 animate-in zoom-in-95 duration-150">
+                  <div className="flex items-center justify-between border-b border-sand pb-3 mb-4">
+                    <div className="flex items-center gap-2.5">
+                      <div className="p-2 bg-cream/70 rounded-xl text-terra">
+                        <Pencil className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h3 className="font-serif text-base font-bold text-brown">Modificar Línea de Presupuesto</h3>
+                        <p className="text-[11px] text-stone">Edite los datos del producto, medidas, cantidad o precio unitario.</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setEditingQuoteItem(null)}
+                      className="text-stone hover:text-brown p-1.5 rounded-lg hover:bg-cream transition-colors cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <div className="flex flex-col gap-4">
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-[10px] uppercase tracking-wider text-stone font-bold">Producto / Modelo</label>
+                      <input
+                        type="text"
+                        value={editingQuoteItem.name}
+                        onChange={e => setEditingQuoteItem({ ...editingQuoteItem, name: e.target.value })}
+                        className="w-full text-xs py-2 px-3 border border-sand rounded-lg bg-white text-brown font-sans focus:ring-1 focus:ring-terra focus:outline-none font-semibold"
+                        placeholder="Ej: Mesa Circular Petiribí Macizo"
+                      />
+                    </div>
+
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-[10px] uppercase tracking-wider text-stone font-bold">Detalle / Medidas / Especificaciones</label>
+                      <textarea
+                        rows={2}
+                        value={editingQuoteItem.detail}
+                        onChange={e => setEditingQuoteItem({ ...editingQuoteItem, detail: e.target.value })}
+                        className="w-full text-xs py-2 px-3 border border-sand rounded-lg bg-white text-brown font-sans focus:ring-1 focus:ring-terra focus:outline-none resize-none"
+                        placeholder="Ej: Diámetro: 1.20m · Base: Arpegio al Piso"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-[10px] uppercase tracking-wider text-stone font-bold">Cantidad</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={editingQuoteItem.qty}
+                          onChange={e => setEditingQuoteItem({ ...editingQuoteItem, qty: parseInt(e.target.value) || 1 })}
+                          className="w-full text-xs py-2 px-3 border border-sand rounded-lg bg-white text-brown font-sans focus:ring-1 focus:ring-terra focus:outline-none text-center font-bold"
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-[10px] uppercase tracking-wider text-stone font-bold">Precio Unitario ($)</label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={editingQuoteItem.unitPrice}
+                          onChange={e => setEditingQuoteItem({ ...editingQuoteItem, unitPrice: parseFloat(e.target.value) || 0 })}
+                          className="w-full text-xs py-2 px-3 border border-sand rounded-lg bg-white text-brown font-sans focus:ring-1 focus:ring-terra focus:outline-none text-right font-bold text-terra font-mono"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="bg-light-cream/70 border border-sand/80 rounded-xl p-3.5 flex justify-between items-center text-xs">
+                      <span className="text-stone font-medium">Subtotal de esta línea:</span>
+                      <span className="font-serif font-bold text-base text-brown">
+                        {fmt(editingQuoteItem.unitPrice * editingQuoteItem.qty)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end gap-2.5 mt-5 pt-3.5 border-t border-sand">
+                    <button
+                      type="button"
+                      onClick={() => setEditingQuoteItem(null)}
+                      className="px-4 py-2 text-xs font-semibold text-stone hover:text-brown border border-sand rounded-xl hover:bg-cream/40 transition-colors cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSaveEditedQuoteItem}
+                      className="px-5 py-2 text-xs font-bold text-cream bg-brown hover:bg-terra rounded-xl transition-all shadow-xs cursor-pointer"
+                    >
+                      Guardar Cambios
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           <PresupuestosEstadosDashboard
@@ -5809,14 +6337,19 @@ export default function App() {
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
                           <div className="flex flex-col gap-1.5">
-                            <label className="text-[10px] tracking-wider uppercase text-stone font-bold">Medidas (Metros)</label>
+                            <label className="text-[10px] tracking-wider uppercase text-stone font-bold">Diámetro (Metros)</label>
                             <div className="flex items-center gap-2">
-                              <input type="text" placeholder="Ancho" value={remitoCircularForm.w} onChange={e => setCircularFormRemito({ ...remitoCircularForm, w: e.target.value })} className="w-24 text-center text-xs py-2 px-3 border border-sand rounded-md bg-white focus:outline-none font-sans" />
-                              <span className="text-stone">×</span>
-                              <input type="text" placeholder="Largo" value={remitoCircularForm.h} onChange={e => setCircularFormRemito({ ...remitoCircularForm, h: e.target.value })} className="w-24 text-center text-xs py-2 px-3 border border-sand rounded-md bg-white focus:outline-none font-sans" />
-                              {parseNum(remitoCircularForm.w) > 0 && parseNum(remitoCircularForm.h) > 0 && (
-                                <span className="text-xs text-terra font-bold ml-2">
-                                  {(parseNum(remitoCircularForm.w) * parseNum(remitoCircularForm.h)).toFixed(2)} m²
+                              <input 
+                                type="text" 
+                                placeholder="Ej: 1.00" 
+                                value={remitoCircularForm.w} 
+                                onChange={e => setCircularFormRemito({ ...remitoCircularForm, w: e.target.value, h: e.target.value })} 
+                                className="w-32 text-center text-xs py-2 px-3 border border-sand rounded-md bg-white focus:outline-none font-sans" 
+                              />
+                              <span className="text-xs text-stone font-medium">m</span>
+                              {parseNum(remitoCircularForm.w) > 0 && (
+                                <span className="text-xs text-terra font-bold ml-1">
+                                  {parseNum(remitoCircularForm.w).toFixed(2)} m de diámetro
                                 </span>
                               )}
                             </div>
@@ -5828,10 +6361,8 @@ export default function App() {
                             <div className="text-[10px] tracking-wider uppercase text-stone font-bold mb-1">Precio Unitario</div>
                             {(() => {
                               const product = catalog.circular.find(t => t.name === remitoCircularForm.wood);
-                              const wVal = parseNum(remitoCircularForm.w);
-                              const hVal = parseNum(remitoCircularForm.h);
-                              const m2 = wVal * hVal;
-                              const calcPrice = product && !isNaN(m2) ? product.pricePerM2 * m2 : null;
+                              const diamVal = parseNum(remitoCircularForm.w);
+                              const calcPrice = product && !isNaN(diamVal) && diamVal > 0 ? product.pricePerM2 * diamVal : null;
                               return renderRemitoEditablePrice(calcPrice, remitoCircularOverride, setRemitoCircularOverride);
                             })()}
                           </div>
@@ -5842,7 +6373,7 @@ export default function App() {
                             </div>
                             <button 
                               onClick={() => addMesaRemito('circular')}
-                              disabled={!remitoCircularForm.wood || !remitoCircularForm.base || isNaN(parseNum(remitoCircularForm.w)) || isNaN(parseNum(remitoCircularForm.h)) || (remitoCircularForm.wood === 'Microcemento' && (!remitoCircularForm.color || !remitoCircularForm.veteado || !remitoCircularForm.brillo))}
+                              disabled={!remitoCircularForm.wood || !remitoCircularForm.base || isNaN(parseNum(remitoCircularForm.w)) || parseNum(remitoCircularForm.w) <= 0 || (remitoCircularForm.wood === 'Microcemento' && (!remitoCircularForm.color || !remitoCircularForm.veteado || !remitoCircularForm.brillo))}
                               className="bg-brown text-cream px-6 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider hover:bg-terra active:scale-95 transition-all duration-150 disabled:opacity-40 disabled:scale-100 disabled:cursor-not-allowed mt-4"
                             >
                               + Agregar
@@ -7388,87 +7919,148 @@ export default function App() {
               {/* PARTE SUPERIOR: TARJETAS KPI DE TESORERÍA */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 {/* Card 1: Flujo Neto / Disponible */}
-                <div className="bg-white border-2 border-sand p-4 rounded-xl shadow-xs flex flex-col justify-between">
+                <div 
+                  onClick={() => setActiveTesoreriaModal('tesoreria_flujo_neto')}
+                  className="bg-white border-2 border-sand p-4 rounded-xl shadow-xs flex flex-col justify-between cursor-pointer hover:border-terra/60 hover:shadow-md transition-all group active:scale-[0.99]"
+                  title="Clic para ver desglose de Flujo Neto de Caja"
+                >
                   <div className="flex justify-between items-center mb-1">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-stone">Caja / Flujo Neto</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-stone group-hover:text-brown transition-colors">Caja / Flujo Neto</span>
+                      <ExternalLink className="w-3 h-3 text-stone/40 group-hover:text-terra transition-colors" />
+                    </div>
                     <span className="text-[9px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">Percibido</span>
                   </div>
-                  <div className="text-2xl font-serif font-bold text-brown my-1">
+                  <div className="text-2xl font-serif font-bold text-brown my-1 group-hover:text-terra transition-colors">
                     {fmt(flujoNetoDeCaja)}
                   </div>
-                  <span className="text-[10px] text-stone">Ingresos cobrados - Egresos pagados</span>
+                  <span className="text-[10px] text-stone flex items-center justify-between">
+                    <span>Ingresos cobrados - Egresos pagados</span>
+                    <span className="text-[9px] font-bold text-terra opacity-0 group-hover:opacity-100 transition-opacity">Ver detalle →</span>
+                  </span>
                 </div>
 
                 {/* Card 2: Total Ingresos Cobrados */}
-                <div className="bg-white border border-sand p-4 rounded-xl shadow-xs flex flex-col justify-between">
+                <div 
+                  onClick={() => setActiveTesoreriaModal('tesoreria_ingresos')}
+                  className="bg-white border border-sand p-4 rounded-xl shadow-xs flex flex-col justify-between cursor-pointer hover:border-emerald-500/50 hover:shadow-md transition-all group active:scale-[0.99]"
+                  title="Clic para ver detalle y auditoría de ingresos cobrados"
+                >
                   <div className="flex justify-between items-center mb-1">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-stone">Total Ingresos</span>
-                    <span className="p-1 bg-emerald-50 rounded text-emerald-700"><TrendingUp className="w-3.5 h-3.5" /></span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-stone group-hover:text-brown transition-colors">Total Ingresos</span>
+                      <ExternalLink className="w-3 h-3 text-stone/40 group-hover:text-emerald-600 transition-colors" />
+                    </div>
+                    <span className="p-1 bg-emerald-50 rounded text-emerald-700 group-hover:bg-emerald-100 transition-colors"><TrendingUp className="w-3.5 h-3.5" /></span>
                   </div>
-                  <div className="text-2xl font-serif font-bold text-emerald-700 my-1">
+                  <div className="text-2xl font-serif font-bold text-emerald-700 my-1 group-hover:brightness-95 transition-all">
                     {fmt(totalIngresosCobrados)}
                   </div>
-                  <span className="text-[10px] text-stone">Señas + Saldos + Ingresos Directos</span>
+                  <span className="text-[10px] text-stone flex items-center justify-between">
+                    <span>Señas + Saldos + Ingresos Directos</span>
+                    <span className="text-[9px] font-bold text-emerald-700 opacity-0 group-hover:opacity-100 transition-opacity">Ver detalle →</span>
+                  </span>
                 </div>
 
                 {/* Card 3: Total Egresos */}
-                <div className="bg-white border border-sand p-4 rounded-xl shadow-xs flex flex-col justify-between">
+                <div 
+                  onClick={() => setActiveTesoreriaModal('tesoreria_egresos')}
+                  className="bg-white border border-sand p-4 rounded-xl shadow-xs flex flex-col justify-between cursor-pointer hover:border-rose-400/60 hover:shadow-md transition-all group active:scale-[0.99]"
+                  title="Clic para ver detalle de costos fijos y egresos de caja"
+                >
                   <div className="flex justify-between items-center mb-1">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-stone">Total Egresos</span>
-                    <span className="p-1 bg-rose-50 rounded text-rose-700"><ShoppingBag className="w-3.5 h-3.5" /></span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-stone group-hover:text-brown transition-colors">Total Egresos</span>
+                      <ExternalLink className="w-3 h-3 text-stone/40 group-hover:text-rose-600 transition-colors" />
+                    </div>
+                    <span className="p-1 bg-rose-50 rounded text-rose-700 group-hover:bg-rose-100 transition-colors"><ShoppingBag className="w-3.5 h-3.5" /></span>
                   </div>
-                  <div className="text-2xl font-serif font-bold text-rose-700 my-1">
+                  <div className="text-2xl font-serif font-bold text-rose-700 my-1 group-hover:brightness-95 transition-all">
                     -{fmt(totalCostoFijo)}
                   </div>
-                  <span className="text-[10px] text-stone">Costos fijos y gastos de fábrica</span>
+                  <span className="text-[10px] text-stone flex items-center justify-between">
+                    <span>Costos fijos y gastos de fábrica</span>
+                    <span className="text-[9px] font-bold text-rose-700 opacity-0 group-hover:opacity-100 transition-opacity">Ver detalle →</span>
+                  </span>
                 </div>
 
                 {/* Card 4: Saldos por Cobrar */}
-                <div className="bg-white border border-sand p-4 rounded-xl shadow-xs flex flex-col justify-between">
+                <div 
+                  onClick={() => setActiveTesoreriaModal('ventas_a_cobrar')}
+                  className="bg-white border border-sand p-4 rounded-xl shadow-xs flex flex-col justify-between cursor-pointer hover:border-amber-400/60 hover:shadow-md transition-all group active:scale-[0.99]"
+                  title="Clic para ver los pedidos con saldo pendiente"
+                >
                   <div className="flex justify-between items-center mb-1">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-stone">Por Cobrar</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-stone group-hover:text-brown transition-colors">Por Cobrar</span>
+                      <ExternalLink className="w-3 h-3 text-stone/40 group-hover:text-amber-700 transition-colors" />
+                    </div>
                     <span className="text-[9px] font-bold bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full">{ordersWithBalance.length} Pedidos</span>
                   </div>
-                  <div className="text-2xl font-serif font-bold text-terra my-1">
+                  <div className="text-2xl font-serif font-bold text-terra my-1 group-hover:brightness-90 transition-all">
                     {fmt(totalSaldosPendientes)}
                   </div>
-                  <span className="text-[10px] text-stone">Saldos pendientes a la entrega</span>
+                  <span className="text-[10px] text-stone flex items-center justify-between">
+                    <span>Saldos pendientes a la entrega</span>
+                    <span className="text-[9px] font-bold text-terra opacity-0 group-hover:opacity-100 transition-opacity">Ver pedidos →</span>
+                  </span>
                 </div>
               </div>
 
               {/* TARJETAS DE DISPONIBILIDAD POR CUENTA */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="bg-white border border-sand/70 p-3.5 rounded-xl flex items-center justify-between shadow-2xs">
+                <div 
+                  onClick={() => setActiveTesoreriaModal('tesoreria_cuenta_efectivo')}
+                  className="bg-white border border-sand/70 p-3.5 rounded-xl flex items-center justify-between shadow-2xs cursor-pointer hover:border-amber-500 hover:shadow-sm transition-all group active:scale-[0.99]"
+                  title="Clic para ver movimientos y arqueo de Efectivo"
+                >
                   <div className="flex items-center gap-3">
-                    <div className="w-3 h-3 rounded-full bg-amber-500 shrink-0"></div>
+                    <div className="w-3 h-3 rounded-full bg-amber-500 shrink-0 group-hover:scale-125 transition-transform"></div>
                     <div>
-                      <span className="text-xs font-bold text-brown block">Efectivo (Caja Chica)</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-bold text-brown block group-hover:text-amber-800 transition-colors">Efectivo (Caja Chica)</span>
+                        <ExternalLink className="w-2.5 h-2.5 text-stone/40 group-hover:text-amber-700 transition-colors" />
+                      </div>
                       <span className="text-[10px] text-stone">Recaudación física showroom</span>
                     </div>
                   </div>
-                  <strong className="text-base font-serif font-bold text-brown">{fmt(accountBalances['Efectivo'])}</strong>
+                  <strong className="text-base font-serif font-bold text-brown group-hover:text-amber-800 transition-colors">{fmt(accountBalances['Efectivo'])}</strong>
                 </div>
 
-                <div className="bg-white border border-sand/70 p-3.5 rounded-xl flex items-center justify-between shadow-2xs">
+                <div 
+                  onClick={() => setActiveTesoreriaModal('tesoreria_cuenta_santander')}
+                  className="bg-white border border-sand/70 p-3.5 rounded-xl flex items-center justify-between shadow-2xs cursor-pointer hover:border-orange-500 hover:shadow-sm transition-all group active:scale-[0.99]"
+                  title="Clic para ver movimientos y transferencias de Banco Santander"
+                >
                   <div className="flex items-center gap-3">
-                    <div className="w-3 h-3 rounded-full bg-orange-600 shrink-0"></div>
+                    <div className="w-3 h-3 rounded-full bg-orange-600 shrink-0 group-hover:scale-125 transition-transform"></div>
                     <div>
-                      <span className="text-xs font-bold text-brown block">Banco Santander</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-bold text-brown block group-hover:text-orange-800 transition-colors">Banco Santander</span>
+                        <ExternalLink className="w-2.5 h-2.5 text-stone/40 group-hover:text-orange-700 transition-colors" />
+                      </div>
                       <span className="text-[10px] text-stone">Transferencias y depósitos</span>
                     </div>
                   </div>
-                  <strong className="text-base font-serif font-bold text-brown">{fmt(accountBalances['Santander'])}</strong>
+                  <strong className="text-base font-serif font-bold text-brown group-hover:text-orange-800 transition-colors">{fmt(accountBalances['Santander'])}</strong>
                 </div>
 
-                <div className="bg-white border border-sand/70 p-3.5 rounded-xl flex items-center justify-between shadow-2xs">
+                <div 
+                  onClick={() => setActiveTesoreriaModal('tesoreria_cuenta_uala')}
+                  className="bg-white border border-sand/70 p-3.5 rounded-xl flex items-center justify-between shadow-2xs cursor-pointer hover:border-sky-500 hover:shadow-sm transition-all group active:scale-[0.99]"
+                  title="Clic para ver cobros online con Ualá"
+                >
                   <div className="flex items-center gap-3">
-                    <div className="w-3 h-3 rounded-full bg-sky-500 shrink-0"></div>
+                    <div className="w-3 h-3 rounded-full bg-sky-500 shrink-0 group-hover:scale-125 transition-transform"></div>
                     <div>
-                      <span className="text-xs font-bold text-brown block">Ualá (Cobros Online)</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-bold text-brown block group-hover:text-sky-800 transition-colors">Ualá (Cobros Online)</span>
+                        <ExternalLink className="w-2.5 h-2.5 text-stone/40 group-hover:text-sky-700 transition-colors" />
+                      </div>
                       <span className="text-[10px] text-stone">Tarjetas y links de pago</span>
                     </div>
                   </div>
-                  <strong className="text-base font-serif font-bold text-brown">{fmt(accountBalances['Uala'])}</strong>
+                  <strong className="text-base font-serif font-bold text-brown group-hover:text-sky-800 transition-colors">{fmt(accountBalances['Uala'])}</strong>
                 </div>
               </div>
               </>
@@ -7786,81 +8378,193 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* COBRO DE SALDOS DE PEDIDOS DE VENTA (5 COLUMNAS - REFERENCIA) */}
+                  {/* COBRO DE SALDOS DE PEDIDOS DE VENTA Y COBROS REGISTRADOS (5 COLUMNAS) */}
                   <div className="lg:col-span-5 bg-white border border-sand rounded-2xl p-6 shadow-sm flex flex-col justify-between">
                     <div>
+                      {/* HEADER WITH TABS */}
                       <div className="flex justify-between items-center mb-3 border-b border-sand pb-2">
-                        <div>
-                          <h3 className="font-serif text-base font-bold text-brown">Pedidos Con Saldo Pendiente</h3>
-                          <p className="text-[10px] text-stone mt-0.5">Seleccioná un pedido para cargar sus datos al formulario.</p>
+                        <div className="flex items-center gap-1.5 bg-cream/50 p-1 rounded-xl border border-sand/60">
+                          <button
+                            type="button"
+                            onClick={() => setIngresosSideTab('pendientes')}
+                            className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                              ingresosSideTab === 'pendientes'
+                                ? 'bg-emerald-700 text-white shadow-xs'
+                                : 'text-stone hover:text-brown'
+                            }`}
+                          >
+                            Saldos a Cobrar ({ordersWithBalance.length})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setIngresosSideTab('recientes')}
+                            className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                              ingresosSideTab === 'recientes'
+                                ? 'bg-emerald-700 text-white shadow-xs'
+                                : 'text-stone hover:text-brown'
+                            }`}
+                          >
+                            Cobros Percibidos ({filteredPayments.length})
+                          </button>
                         </div>
-                        <span className="text-xs font-bold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
-                          {ordersWithBalance.length} pendientes
+                        <span className="text-[10px] text-stone font-semibold">
+                          {ingresosSideTab === 'pendientes' ? 'Por cobrar' : 'En caja'}
                         </span>
                       </div>
 
-                      <div className="flex flex-col gap-2.5 max-h-[420px] overflow-y-auto pr-1">
-                        {ordersWithBalance.length === 0 ? (
-                          <div className="text-center py-12 text-stone text-xs italic">
-                            ¡Excelente! No hay pedidos con saldos pendientes.
-                          </div>
-                        ) : (
-                          ordersWithBalance.map(s => {
-                            const collected = s.senaAmount || 0;
-                            const outstanding = s.total - collected;
-                            const isSelected = paymentRegisterForm.orderId === s.id;
-                            return (
-                              <div
-                                key={s.id}
-                                className={`p-3.5 border rounded-xl flex items-center justify-between text-xs transition-all ${
-                                  isSelected
-                                    ? 'bg-emerald-50/90 border-emerald-500 shadow-xs ring-1 ring-emerald-300'
-                                    : 'bg-light-cream/20 border-sand/60 hover:bg-light-cream/50'
-                                }`}
-                              >
-                                <div>
+                      {ingresosSideTab === 'pendientes' ? (
+                        <div className="flex flex-col gap-2.5 max-h-[420px] overflow-y-auto pr-1">
+                          {ordersWithBalance.length === 0 ? (
+                            <div className="text-center py-12 text-stone text-xs italic">
+                              ¡Excelente! No hay pedidos con saldos pendientes.
+                            </div>
+                          ) : (
+                            ordersWithBalance.map(s => {
+                              const collected = s.senaAmount || 0;
+                              const outstanding = s.total - collected;
+                              const isSelected = paymentRegisterForm.orderId === s.id;
+                              const pendingTxDetail: TransactionDetailItem = {
+                                rawType: 'pedido_saldo',
+                                originalId: s.id,
+                                id: s.id,
+                                codigo: `PED-${s.orderNum}`,
+                                fecha: s.orderDate || s.createdAt || new Date().toISOString().split('T')[0],
+                                entidad: s.client?.nombre || 'Consumidor Final',
+                                clientName: s.client?.nombre || 'Consumidor Final',
+                                operacion: `Saldo Pendiente Pedido #${s.orderNum}`,
+                                descripcion: `Saldo por cobrar del pedido ${s.orderNum} (${s.items?.map((it: any) => `${it.quantity}x ${it.name}`).join(', ') || 'Productos Barda'})`,
+                                moneda: 'ARS',
+                                medio: s.paymentMethod || 'Efectivo',
+                                subCategoria: 'Saldo de Venta',
+                                monto: outstanding,
+                                baseMonto: outstanding,
+                                ivaPct: 0,
+                                estado: 'Pendiente',
+                                nota: `Total Venta: $${fmt(s.total)} | Señado: $${fmt(collected)} | Saldo: $${fmt(outstanding)}`,
+                                orderNum: s.orderNum,
+                                orderId: s.id,
+                                originalItem: s
+                              };
+
+                              return (
+                                <div
+                                  key={s.id}
+                                  onClick={() => setSelectedTransactionDetail(pendingTxDetail)}
+                                  className={`p-3.5 border rounded-xl flex items-center justify-between text-xs transition-all cursor-pointer group shadow-2xs ${
+                                    isSelected
+                                      ? 'bg-emerald-50/90 border-emerald-500 ring-1 ring-emerald-300'
+                                      : 'bg-light-cream/20 border-sand/60 hover:bg-emerald-50/40 hover:border-emerald-300'
+                                  }`}
+                                  title="Clic para ver detalle de la transacción / pedido"
+                                >
+                                  <div>
+                                    <div className="flex items-center gap-2">
+                                      <strong className="text-brown font-mono font-bold text-sm group-hover:text-emerald-800 transition-colors">{s.orderNum}</strong>
+                                      <span className="text-stone">&bull;</span>
+                                      <strong className="text-brown">{s.client?.nombre || 'Consumidor Final'}</strong>
+                                    </div>
+                                    <div className="text-[10px] text-stone mt-1 flex flex-wrap gap-2">
+                                      <span>Total: <strong>{fmt(s.total)}</strong></span>
+                                      <span>&bull; Señado: <strong>{fmt(collected)}</strong></span>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                                    <div className="text-right mr-1">
+                                      <span className="text-[9px] uppercase font-bold text-stone block">Saldo</span>
+                                      <strong className="text-xs text-emerald-800 font-mono font-bold">{fmt(outstanding)}</strong>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => setPaymentRegisterForm({
+                                        orderId: s.id,
+                                        amount: String(outstanding),
+                                        account: s.paymentMethod?.toLowerCase().includes('cuotas') ? 'Uala' : s.paymentMethod?.toLowerCase().includes('transferencia') ? 'Santander' : 'Efectivo',
+                                        currency: 'ARS',
+                                        iva: '0',
+                                        pendingPayment: false,
+                                        date: new Date().toISOString().split('T')[0],
+                                        note: `Cobro saldo pedido ${s.orderNum}`
+                                      })}
+                                      disabled={!canEditFinanzas}
+                                      className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-40 ${
+                                        isSelected
+                                          ? 'bg-emerald-700 text-white shadow-xs'
+                                          : 'bg-brown text-cream hover:bg-emerald-700'
+                                      }`}
+                                    >
+                                      {isSelected ? 'Cargado' : 'Cobrar'}
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      ) : (
+                        <div className="flex flex-col gap-2 max-h-[420px] overflow-y-auto pr-1">
+                          {filteredPayments.length === 0 ? (
+                            <div className="text-center py-12 text-stone text-xs italic">
+                              No hay cobros registrados en este período.
+                            </div>
+                          ) : (
+                            filteredPayments.map((p, idx) => {
+                              const paymentTxDetail: TransactionDetailItem = {
+                                rawType: 'ingreso',
+                                isLedger: true,
+                                isFixedCost: false,
+                                originalId: p.id,
+                                id: p.id || idx,
+                                codigo: p.orderNum ? `ING-${p.orderNum}` : `ING-${String(p.id).slice(-4)}`,
+                                fecha: p.date || '—',
+                                entidad: p.clientName || 'Consumidor Final',
+                                clientName: p.clientName || 'Consumidor Final',
+                                operacion: p.note || (p.type === 'Saldo' ? `Cobro Saldo Pedido #${p.orderNum}` : p.orderNum ? `Seña / Anticipo Pedido #${p.orderNum}` : 'Ingreso Directo'),
+                                descripcion: p.note || p.description,
+                                moneda: p.currency || 'ARS',
+                                medio: p.account || p.paymentMethod || 'Efectivo',
+                                cuenta: p.account || 'Efectivo',
+                                subCategoria: p.type || 'Cobro',
+                                monto: p.amount || 0,
+                                baseMonto: p.baseAmount || p.amount || 0,
+                                ivaPct: p.ivaPct || 0,
+                                estado: p.pendingPayment ? 'Pendiente' : 'Cobrado',
+                                nota: p.note,
+                                orderNum: p.orderNum,
+                                originalItem: p
+                              };
+
+                              return (
+                                <div
+                                  key={p.id || idx}
+                                  onClick={() => setSelectedTransactionDetail(paymentTxDetail)}
+                                  className="p-3 bg-light-cream/20 border border-sand/60 rounded-xl flex items-center justify-between text-xs hover:bg-emerald-50/40 hover:border-emerald-300 transition-all cursor-pointer group shadow-2xs"
+                                  title="Clic para ver detalle de la transacción"
+                                >
+                                  <div>
+                                    <div className="flex items-center gap-2">
+                                      <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded-md text-[9px] font-bold uppercase tracking-wider">
+                                        {p.type || 'Cobro'}
+                                      </span>
+                                      <strong className="text-brown group-hover:text-emerald-800 transition-colors">
+                                        {p.clientName || (p.orderNum ? `Pedido #${p.orderNum}` : 'Ingreso')}
+                                      </strong>
+                                    </div>
+                                    <div className="text-[10px] text-stone mt-1 flex items-center gap-2">
+                                      <span>Fecha: {p.date || '—'}</span>
+                                      {p.account && <span>&bull; {p.account}</span>}
+                                      {p.pendingPayment && <span className="text-amber-700 font-bold bg-amber-50 px-1 rounded">Pendiente</span>}
+                                    </div>
+                                  </div>
                                   <div className="flex items-center gap-2">
-                                    <strong className="text-brown font-mono font-bold text-sm">{s.orderNum}</strong>
-                                    <span className="text-stone">&bull;</span>
-                                    <strong className="text-brown">{s.client?.nombre || 'Consumidor Final'}</strong>
-                                  </div>
-                                  <div className="text-[10px] text-stone mt-1 flex flex-wrap gap-2">
-                                    <span>Total: <strong>{fmt(s.total)}</strong></span>
-                                    <span>&bull; Señado: <strong>{fmt(collected)}</strong></span>
+                                    <strong className="text-emerald-700 font-mono font-bold text-xs">+{fmt(p.amount)}</strong>
+                                    <Eye className="w-3.5 h-3.5 text-stone/50 group-hover:text-emerald-700 transition-colors" />
                                   </div>
                                 </div>
-                                <div className="flex items-center gap-2">
-                                  <div className="text-right">
-                                    <span className="text-[9px] uppercase font-bold text-stone block">Saldo</span>
-                                    <strong className="text-xs text-emerald-800 font-mono font-bold">{fmt(outstanding)}</strong>
-                                  </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => setPaymentRegisterForm({
-                                      orderId: s.id,
-                                      amount: String(outstanding),
-                                      account: s.paymentMethod?.toLowerCase().includes('cuotas') ? 'Uala' : s.paymentMethod?.toLowerCase().includes('transferencia') ? 'Santander' : 'Efectivo',
-                                      currency: 'ARS',
-                                      iva: '0',
-                                      pendingPayment: false,
-                                      date: new Date().toISOString().split('T')[0],
-                                      note: `Cobro saldo pedido ${s.orderNum}`
-                                    })}
-                                    disabled={!canEditFinanzas}
-                                    className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-40 ${
-                                      isSelected
-                                        ? 'bg-emerald-700 text-white shadow-xs'
-                                        : 'bg-brown text-cream hover:bg-emerald-700'
-                                    }`}
-                                  >
-                                    {isSelected ? 'Cargado' : 'Cobrar Saldo'}
-                                  </button>
-                                </div>
-                              </div>
-                            );
-                          })
-                        )}
-                      </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -8045,33 +8749,74 @@ export default function App() {
                             No hay egresos registrados para este período.
                           </div>
                         ) : (
-                          filteredFixedCosts.map(c => (
-                            <div key={c.id} className="p-3 bg-light-cream/20 border border-sand/40 rounded-xl flex items-center justify-between text-xs hover:bg-light-cream/45 transition-all">
-                              <div>
+                          filteredFixedCosts.map(c => {
+                            const expenseTxDetail: TransactionDetailItem = {
+                              rawType: 'egreso',
+                              isLedger: false,
+                              isFixedCost: true,
+                              originalId: c.id,
+                              id: c.id,
+                              codigo: `EGR-${String(c.id).slice(-4)}`,
+                              fecha: c.date || c.month || '—',
+                              entidad: c.description || c.category || 'Gasto General',
+                              operacion: c.description || 'Gasto / Egreso de Operación',
+                              descripcion: c.description,
+                              moneda: c.currency || 'ARS',
+                              medio: c.account || 'Efectivo',
+                              cuenta: c.account || 'Efectivo',
+                              subCategoria: c.category || 'Gasto Fijo',
+                              categoria: c.category,
+                              monto: c.amount || 0,
+                              baseMonto: c.baseAmount || c.amount || 0,
+                              ivaPct: c.ivaPct || 0,
+                              estado: c.pendingPayment ? 'Pendiente' : 'Pagado',
+                              nota: c.description,
+                              originalItem: c
+                            };
+
+                            return (
+                              <div 
+                                key={c.id} 
+                                onClick={() => setSelectedTransactionDetail(expenseTxDetail)}
+                                className="p-3 bg-light-cream/20 border border-sand/60 rounded-xl flex items-center justify-between text-xs hover:bg-rose-50/40 hover:border-rose-300 transition-all cursor-pointer group shadow-2xs"
+                                title="Clic para ver detalle de la transacción"
+                              >
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="px-2 py-0.5 bg-rose-100 text-rose-800 rounded-md text-[9px] font-bold uppercase tracking-wider">{c.category}</span>
+                                    <strong className="text-brown group-hover:text-rose-900 transition-colors">{c.description}</strong>
+                                  </div>
+                                  <div className="text-[10px] text-stone mt-1 flex items-center gap-2">
+                                    <span>Fecha: {c.date || c.month}</span>
+                                    {c.account && <span>&bull; {c.account}</span>}
+                                    {c.pendingPayment && <span className="text-amber-700 font-bold bg-amber-50 px-1 rounded">Pendiente</span>}
+                                  </div>
+                                </div>
                                 <div className="flex items-center gap-2">
-                                  <span className="px-2 py-0.5 bg-rose-100 text-rose-800 rounded-md text-[9px] font-bold uppercase tracking-wider">{c.category}</span>
-                                  <strong className="text-brown">{c.description}</strong>
-                                </div>
-                                <div className="text-[10px] text-stone mt-1 flex items-center gap-2">
-                                  <span>Fecha: {c.date || c.month}</span>
-                                  {c.account && <span>&bull; {c.account}</span>}
-                                  {c.pendingPayment && <span className="text-amber-700 font-bold bg-amber-50 px-1 rounded">Pendiente</span>}
+                                  <strong className="text-rose-700 font-mono font-bold text-xs">-{fmt(c.amount)}</strong>
+                                  <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                                    <button
+                                      type="button"
+                                      onClick={() => setSelectedTransactionDetail(expenseTxDetail)}
+                                      className="p-1 text-stone/60 hover:text-terra transition-colors"
+                                      title="Ver detalle del gasto"
+                                    >
+                                      <Eye className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => deleteFixedCost(c.id)}
+                                      disabled={!canEditFinanzas}
+                                      className="p-1 text-stone/60 hover:text-rose-600 transition-colors disabled:opacity-40"
+                                      title="Eliminar egreso"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
                                 </div>
                               </div>
-                              <div className="flex items-center gap-2">
-                                <strong className="text-rose-700 font-mono font-bold text-xs">-{fmt(c.amount)}</strong>
-                                <button
-                                  type="button"
-                                  onClick={() => deleteFixedCost(c.id)}
-                                  disabled={!canEditFinanzas}
-                                  className="p-1 text-stone/60 hover:text-rose-600 transition-colors disabled:opacity-40"
-                                  title="Eliminar egreso"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-                            </div>
-                          ))
+                            );
+                          })
                         )}
                       </div>
                     </div>
@@ -8353,27 +9098,32 @@ export default function App() {
 
               {/* SUBTAB: LIBRO DE MOVIMIENTOS */}
               {tesoreriaSubTab === 'movimientos' && (() => {
-                const allMovements = [
+                const allMovements: TransactionDetailItem[] = [
                   ...filteredPayments.map(p => ({
-                    rawType: 'ingreso',
+                    rawType: 'ingreso' as const,
                     isLedger: true,
                     isFixedCost: false,
                     originalId: p.id,
                     codigo: p.orderNum ? `ING-${p.orderNum}` : `ING-${String(p.id).slice(-4)}`,
                     fecha: p.date || '—',
                     entidad: p.clientName || 'Consumidor Final',
+                    clientName: p.clientName || 'Consumidor Final',
                     operacion: p.note || (p.type === 'Saldo' ? `Cobro Saldo Pedido #${p.orderNum}` : p.orderNum ? `Seña / Anticipo Pedido #${p.orderNum}` : 'Ingreso Directo'),
+                    descripcion: p.note || p.description,
                     moneda: p.currency || 'ARS',
                     medio: p.account || p.paymentMethod || 'Efectivo',
+                    cuenta: p.account || 'Efectivo',
                     subCategoria: p.type || 'Cobro',
                     monto: p.amount || 0,
                     baseMonto: p.baseAmount || p.amount || 0,
                     ivaPct: p.ivaPct || 0,
                     estado: p.pendingPayment ? 'Pendiente' : 'Cobrado',
+                    nota: p.note,
+                    orderNum: p.orderNum,
                     originalItem: p
                   })),
                   ...filteredFixedCosts.map(c => ({
-                    rawType: 'egreso',
+                    rawType: 'egreso' as const,
                     isLedger: false,
                     isFixedCost: true,
                     originalId: c.id,
@@ -8381,13 +9131,17 @@ export default function App() {
                     fecha: c.date || c.month || '—',
                     entidad: c.description || c.category || 'Gasto General',
                     operacion: c.description || 'Gasto / Egreso de Operación',
+                    descripcion: c.description,
                     moneda: c.currency || 'ARS',
                     medio: c.account || 'Efectivo',
+                    cuenta: c.account || 'Efectivo',
                     subCategoria: c.category || 'Gasto Fijo',
+                    categoria: c.category,
                     monto: c.amount || 0,
                     baseMonto: c.baseAmount || c.amount || 0,
                     ivaPct: c.ivaPct || 0,
                     estado: c.pendingPayment ? 'Pendiente' : 'Pagado',
+                    nota: c.description,
                     originalItem: c
                   }))
                 ].sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime());
@@ -8550,7 +9304,12 @@ export default function App() {
                               filteredMovements.map((m) => {
                                 const isIngreso = m.rawType === 'ingreso';
                                 return (
-                                  <tr key={`${m.codigo}-${m.originalId}`} className="hover:bg-cream/20 transition-colors group">
+                                  <tr
+                                    key={`${m.codigo}-${m.originalId}`}
+                                    onClick={() => setSelectedTransactionDetail(m)}
+                                    className="hover:bg-cream/40 transition-colors group cursor-pointer"
+                                    title="Clic para ver detalle de la transacción"
+                                  >
                                     <td className="py-3 px-3 text-center">
                                       <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${
                                         isIngreso ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
@@ -8558,7 +9317,7 @@ export default function App() {
                                         {isIngreso ? '+' : '-'}
                                       </span>
                                     </td>
-                                    <td className="py-3 px-3 font-mono font-bold text-brown whitespace-nowrap">
+                                    <td className="py-3 px-3 font-mono font-bold text-brown whitespace-nowrap group-hover:text-terra transition-colors">
                                       {m.codigo}
                                     </td>
                                     <td className="py-3 px-3 text-stone whitespace-nowrap">
@@ -8597,11 +9356,20 @@ export default function App() {
                                     }`}>
                                       {isIngreso ? '+' : '-'}${fmt(m.monto)}
                                     </td>
-                                    <td className="py-3 px-3 text-center whitespace-nowrap">
+                                    <td className="py-3 px-3 text-center whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                                       <div className="flex items-center justify-center gap-1 opacity-80 group-hover:opacity-100">
+                                        <button
+                                          type="button"
+                                          onClick={() => setSelectedTransactionDetail(m)}
+                                          title="Ver detalle completo"
+                                          className="p-1.5 text-stone hover:text-brown hover:bg-sand/30 rounded-lg transition-colors cursor-pointer"
+                                        >
+                                          <Eye className="w-3.5 h-3.5" />
+                                        </button>
                                         {canEditFinanzas ? (
                                           <>
                                             <button
+                                              type="button"
                                               onClick={() => openEditMovement(m)}
                                               title="Editar gasto / movimiento"
                                               className="p-1.5 text-stone hover:text-terra hover:bg-terra/10 rounded-lg transition-colors cursor-pointer"
@@ -8609,6 +9377,7 @@ export default function App() {
                                               <Edit2 className="w-3.5 h-3.5" />
                                             </button>
                                             <button
+                                              type="button"
                                               onClick={() => deleteMovementItem(m)}
                                               title="Eliminar asiento"
                                               className="p-1.5 text-stone hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
@@ -8632,6 +9401,53 @@ export default function App() {
                   </div>
                 );
               })()}
+
+              {/* MODALES DE DETALLE / POP-UPS DE TESORERÍA & FINANZAS */}
+              <DashboardModals
+                isOpen={activeTesoreriaModal !== null}
+                onClose={() => setActiveTesoreriaModal(null)}
+                modalType={activeTesoreriaModal}
+                fmt={fmt}
+                selectedPeriodDescription={`${MONTHS_LIST.find(m => m.value === finanzasMonth)?.label || 'Todos los Meses'} ${finanzasYear === 'todos' ? '(Histórico)' : finanzasYear}`}
+                filteredSales={filteredSalesForFinances}
+                allSales={sales}
+                filteredFixedCosts={filteredFixedCosts}
+                allFixedCosts={fixedCosts}
+                paymentsLedger={paymentsLedger}
+                totalVentas={totalVentas}
+                totalCostoVentas={totalCostoVariable}
+                totalGastosFijos={totalCostoFijo}
+                resultadoNeto={utilidadOperativaDevengada}
+                cantidadVentas={filteredSalesForFinances.length}
+                ventaPromedio={filteredSalesForFinances.length > 0 ? Math.round(totalVentas / filteredSalesForFinances.length) : 0}
+                totalSaldosPendientes={totalSaldosPendientes}
+                ordersWithBalance={ordersWithBalance}
+                accountBalances={accountBalances}
+                flujoNetoDeCaja={flujoNetoDeCaja}
+                totalIngresosCobrados={totalIngresosCobrados}
+                totalCostoFijo={totalCostoFijo}
+                fixedCosts={fixedCosts}
+              />
+
+              {/* MODAL DE DETALLE INDIVIDUAL DE MOVIMIENTO / GASTO / COBRO */}
+              <TransactionDetailModal
+                isOpen={selectedTransactionDetail !== null}
+                onClose={() => setSelectedTransactionDetail(null)}
+                transaction={selectedTransactionDetail}
+                fmt={fmt}
+                onEdit={(item) => {
+                  setSelectedTransactionDetail(null);
+                  openEditMovement(item);
+                }}
+                onDelete={(item) => {
+                  setSelectedTransactionDetail(null);
+                  deleteMovementItem(item);
+                }}
+                onToggleStatus={(item) => {
+                  toggleMovementStatus(item);
+                }}
+                canEdit={canEditFinanzas}
+              />
 
             </div>
           );
@@ -9540,6 +10356,13 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* WHATSAPP INTEGRATION & SIMULATOR MODAL */}
+      <WhatsAppIntegrationModal
+        isOpen={showWhatsAppModal}
+        onClose={() => setShowWhatsAppModal(false)}
+        onApplyTransaction={handleApplyWhatsAppTransaction}
+      />
 
       {/* FOOTER WITH LOGO */}
       <footer className="bg-white border-t border-sand py-4 px-6 mt-12 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-stone print:hidden">
