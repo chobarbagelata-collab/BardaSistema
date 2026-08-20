@@ -103,8 +103,8 @@ Concepto: ${concept}
 Categoría: ${category}
 Cuenta: ${account}
 Estado: ${transaction.estado || (isPending ? 'Pendiente' : isEgreso ? 'Pagado' : 'Cobrado')}
-Total: ${currency === 'USD' ? 'US$' : '$'}${fmt(totalAmount)}
-${ivaPct > 0 ? `Base: $${fmt(baseAmount)} | IVA (${ivaPct}%): $${fmt(ivaAmount)}` : ''}
+Total: ${currency === 'USD' ? `US$ ${totalAmount.toLocaleString('es-AR')}` : fmt(totalAmount)}
+${ivaPct > 0 ? `Base: ${currency === 'USD' ? `US$ ${baseAmount.toLocaleString('es-AR')}` : fmt(baseAmount)} | IVA (${ivaPct}%): ${currency === 'USD' ? `US$ ${ivaAmount.toLocaleString('es-AR')}` : fmt(ivaAmount)}` : ''}
 ${transaction.nota ? `Notas: ${transaction.nota}` : ''}
 ---------------------------------
     `.trim();
@@ -201,7 +201,7 @@ ${transaction.nota ? `Notas: ${transaction.nota}` : ''}
                 <span className={`text-2xl sm:text-3xl font-serif font-bold ${
                   isEgreso ? 'text-rose-700' : 'text-emerald-700'
                 }`}>
-                  {isEgreso ? '-' : '+'}${fmt(totalAmount)}
+                  {isEgreso ? '-' : '+'}{fmt(totalAmount)}
                 </span>
                 <span className="text-xs font-mono font-bold text-stone">
                   {currency}
@@ -214,10 +214,10 @@ ${transaction.nota ? `Notas: ${transaction.nota}` : ''}
               {ivaPct > 0 ? (
                 <div className="bg-white/80 border border-sand/80 px-3 py-1.5 rounded-xl text-right">
                   <div className="text-[10px] text-stone">
-                    Base: <strong className="text-brown">${fmt(baseAmount)}</strong>
+                    Base: <strong className="text-brown">{fmt(baseAmount)}</strong>
                   </div>
                   <div className="text-[10px] text-stone font-semibold">
-                    IVA ({ivaPct}%): <strong className="text-brown">${fmt(ivaAmount)}</strong>
+                    IVA ({ivaPct}%): <strong className="text-brown">{fmt(ivaAmount)}</strong>
                   </div>
                 </div>
               ) : (

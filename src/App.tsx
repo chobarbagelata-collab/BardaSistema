@@ -5,7 +5,7 @@ import {
   ChevronDown, ChevronUp, Sliders, Edit, Edit2, Tag, Eye, EyeOff, 
   CheckCircle, Clock, Package, AlertCircle, Pencil, Wrench, Layers,
   Download, BarChart2, Paperclip, Image as ImageIcon, Upload, X, File, ExternalLink, Wallet,
-  User as UserIcon, LogOut, ShieldCheck, MessageSquare
+  User as UserIcon, LogOut, ShieldCheck, MessageSquare, MoreVertical, ArrowDownLeft
 } from 'lucide-react';
 import AuthScreen from './components/AuthScreen';
 import UserManagement from './components/UserManagement';
@@ -16,6 +16,7 @@ import { PresupuestosEstadosDashboard, QuoteLogItem } from './components/Presupu
 import { WhatsAppIntegrationModal } from './components/WhatsAppIntegrationModal';
 import { DashboardModals, DashboardModalType } from './components/DashboardModals';
 import { TransactionDetailModal, TransactionDetailItem } from './components/TransactionDetailModal';
+import { SaleDetailModal } from './components/SaleDetailModal';
 import { ParsedWhatsAppMessage } from './server/whatsappService';
 import { User, UserPermissions, DEFAULT_PERMISSIONS_BY_ROLE, formatAbbreviatedName } from './types';
 import { onAuthStateChanged, signOut } from "firebase/auth";
@@ -199,7 +200,11 @@ const DEFAULT_PAGOS_DATA = [
 // Helper to safely format currency
 const fmt = (n: number | null | undefined) => {
   if (n === null || n === undefined || isNaN(n)) return '—';
-  return '$ ' + Math.round(n).toLocaleString('es-AR');
+  const val = Math.round(n);
+  if (val < 0) {
+    return '-AR$ ' + Math.abs(val).toLocaleString('es-AR');
+  }
+  return 'AR$ ' + val.toLocaleString('es-AR');
 };
 
 const fmtDate = (iso: string) => {
@@ -650,7 +655,10 @@ export default function App() {
   const [tesoreriaSubTab, setTesoreriaSubTab] = useState<'resumen' | 'ingresos' | 'egresos' | 'movimientos'>('resumen');
   const [movimientosSearch, setMovimientosSearch] = useState<string>('');
   const [movimientosTypeFilter, setMovimientosTypeFilter] = useState<'todos' | 'ingresos' | 'egresos' | 'pendientes'>('todos');
+  const [showMovimientosFilterMenu, setShowMovimientosFilterMenu] = useState<boolean>(false);
+  const [activeMovementMenuId, setActiveMovementMenuId] = useState<string | null>(null);
   const [selectedTransactionDetail, setSelectedTransactionDetail] = useState<TransactionDetailItem | null>(null);
+  const [selectedSaleDetail, setSelectedSaleDetail] = useState<any | null>(null);
   const [ingresosSideTab, setIngresosSideTab] = useState<'pendientes' | 'recientes'>('pendientes');
   const [editingMovement, setEditingMovement] = useState<any | null>(null);
   const [editMovementForm, setEditMovementForm] = useState({
@@ -678,6 +686,23 @@ export default function App() {
     iva: '0',
     pendingPayment: false,
     date: new Date().toISOString().split('T')[0],
+    note: ''
+  });
+
+  // Modal para Cargar Nuevo Movimiento (Ingreso o Egreso) desde Libro de Movimientos
+  const [showNewMovementModal, setShowNewMovementModal] = useState<boolean>(false);
+  const [newMovementType, setNewMovementType] = useState<'ingreso' | 'egreso'>('ingreso');
+  const [newMovementModalForm, setNewMovementModalForm] = useState({
+    incomeMode: 'directo' as 'directo' | 'saldo',
+    orderId: null as number | null,
+    date: new Date().toISOString().split('T')[0],
+    category: 'Aporte de Capital',
+    description: '',
+    amount: '',
+    iva: '0',
+    currency: 'ARS',
+    account: 'Efectivo',
+    pendingPayment: false,
     note: ''
   });
 
@@ -2249,12 +2274,12 @@ export default function App() {
   };
 
   // Order List Interactions
-  const updateOrderStatus = (id: number, field: 'status' | 'paymentStatus', val: string) => {
+  const updateOrderStatus = (id: number | string, field: 'status' | 'paymentStatus', val: string) => {
     let balanceCollected = 0;
     let orderToUpdate: any = null;
 
     const updated = sales.map(s => {
-      if (s.id === id) {
+      if (String(s.id) === String(id)) {
         orderToUpdate = s;
         const next = { ...s, [field]: val };
         // If paid complete, update seña
@@ -2296,30 +2321,170 @@ export default function App() {
     }
   };
 
-  const deleteOrder = (id: number) => {
+  const deleteOrder = (id: number | string) => {
     if (!confirm('¿Está seguro de que desea eliminar esta orden de pedido y toda su información vinculada (taller, cobros)?')) return;
-    const orderToDelete = sales.find(s => s.id === id);
+    const orderToDelete = sales.find(s => String(s.id) === String(id));
 
     // 1. Delete from sales list
-    const updatedSales = sales.filter(s => s.id !== id);
+    const updatedSales = sales.filter(s => String(s.id) !== String(id));
     setSales(updatedSales);
     localStorage.setItem('barda_sales_orders', JSON.stringify(updatedSales));
 
     if (orderToDelete) {
       // 2. Delete from fabrication list (fabList)
-      const updatedFabList = fabList.filter(f => f.orderNum !== orderToDelete.orderNum && f.id !== orderToDelete.id);
+      const updatedFabList = fabList.filter(f => f.orderNum !== orderToDelete.orderNum && String(f.id) !== String(orderToDelete.id));
       setFabList(updatedFabList);
       localStorage.setItem('barda_fabricacion_list', JSON.stringify(updatedFabList));
 
       // 3. Delete from payments ledger (paymentsLedger)
-      const updatedLedger = paymentsLedger.filter(p => p.orderId !== orderToDelete.id && p.orderNum !== orderToDelete.orderNum);
+      const updatedLedger = paymentsLedger.filter(p => String(p.orderId) !== String(orderToDelete.id) && p.orderNum !== orderToDelete.orderNum);
       setPaymentsLedger(updatedLedger);
       localStorage.setItem('barda_payments_ledger', JSON.stringify(updatedLedger));
     }
   };
 
+  const handleAddItemToEditingSale = () => {
+    if (!editingSale) return;
+    const newItem = {
+      id: Date.now() + Math.random(),
+      name: '',
+      nombre: '',
+      category: 'Mesas',
+      cat: 'Mesas',
+      detail: '',
+      medidas: '',
+      qty: 1,
+      cant: 1,
+      quantity: 1,
+      unitPrice: 0,
+      precioUnitario: 0,
+      cost: 0,
+      costoUnitario: 0,
+      costo: 0,
+      totalPrice: 0,
+      precioTotal: 0,
+      subtotal: 0,
+      costoTotal: 0
+    };
+    const updatedItems = [...(editingSale.items || []), newItem];
+    const newTotal = updatedItems.reduce((sum: number, it: any) => sum + (Number(it.totalPrice || (it.unitPrice * (it.qty || 1))) || 0), 0);
+    const newCost = updatedItems.reduce((sum: number, it: any) => sum + (Number(it.costoTotal || (it.cost * (it.qty || 1))) || 0), 0);
+    
+    setEditingSale({
+      ...editingSale,
+      items: updatedItems,
+      total: newTotal,
+      totalCost: newCost
+    });
+  };
+
+  const handleUpdateEditingSaleItem = (idx: number, field: string, val: any) => {
+    if (!editingSale) return;
+    const updatedItems = (editingSale.items || []).map((it: any, i: number) => {
+      if (i !== idx) return it;
+      const updated = { ...it, [field]: val };
+      if (field === 'qty' || field === 'cant') {
+        const q = Math.max(1, parseInt(val, 10) || 1);
+        updated.qty = q;
+        updated.cant = q;
+        updated.quantity = q;
+      }
+      if (field === 'unitPrice' || field === 'precioUnitario') {
+        const p = Math.max(0, parseFloat(val) || 0);
+        updated.unitPrice = p;
+        updated.precioUnitario = p;
+      }
+      if (field === 'cost' || field === 'costoUnitario' || field === 'costo') {
+        const c = Math.max(0, parseFloat(val) || 0);
+        updated.cost = c;
+        updated.costoUnitario = c;
+        updated.costo = c;
+      }
+      if (field === 'name' || field === 'nombre') {
+        updated.name = val;
+        updated.nombre = val;
+      }
+      if (field === 'category' || field === 'cat') {
+        updated.category = val;
+        updated.cat = val;
+      }
+      if (field === 'detail' || field === 'medidas') {
+        updated.detail = val;
+        updated.medidas = val;
+      }
+
+      const q = Number(updated.qty ?? updated.cant ?? 1) || 1;
+      const p = Number(updated.unitPrice ?? updated.precioUnitario ?? 0) || 0;
+      const c = Number(updated.cost ?? updated.costoUnitario ?? updated.costo ?? 0) || 0;
+      
+      updated.totalPrice = p * q;
+      updated.precioTotal = p * q;
+      updated.subtotal = p * q;
+      updated.costoTotal = c * q;
+      return updated;
+    });
+
+    const newTotal = updatedItems.reduce((sum: number, it: any) => sum + (Number(it.totalPrice) || 0), 0);
+    const newCost = updatedItems.reduce((sum: number, it: any) => sum + (Number(it.costoTotal) || 0), 0);
+
+    setEditingSale({
+      ...editingSale,
+      items: updatedItems,
+      total: newTotal,
+      totalCost: newCost
+    });
+  };
+
+  const handleRemoveEditingSaleItem = (idx: number) => {
+    if (!editingSale) return;
+    const updatedItems = (editingSale.items || []).filter((_: any, i: number) => i !== idx);
+    const newTotal = updatedItems.reduce((sum: number, it: any) => sum + (Number(it.totalPrice || ((it.unitPrice || 0) * (it.qty || 1))) || 0), 0);
+    const newCost = updatedItems.reduce((sum: number, it: any) => sum + (Number(it.costoTotal || ((it.cost || 0) * (it.qty || 1))) || 0), 0);
+
+    setEditingSale({
+      ...editingSale,
+      items: updatedItems,
+      total: newTotal,
+      totalCost: newCost
+    });
+  };
+
   const handleSaveEditedSale = () => {
     if (!editingSale) return;
+
+    // Normalize items to ensure consistency across the whole ERP
+    const normalizedItems = (editingSale.items || []).map((it: any) => {
+      const qty = Math.max(1, Number(it.qty ?? it.cant ?? it.quantity ?? 1) || 1);
+      const unitPrice = Math.max(0, Number(it.unitPrice ?? it.precioUnitario ?? 0) || 0);
+      const cost = Math.max(0, Number(it.cost ?? it.costoUnitario ?? it.costo ?? 0) || 0);
+      const name = (it.name || it.nombre || 'Producto').trim();
+      const detail = (it.detail || it.medidas || '').trim();
+      const category = it.category || it.cat || 'Otros';
+      const totalPrice = unitPrice * qty;
+      const costoTotal = cost * qty;
+
+      return {
+        ...it,
+        id: it.id || Date.now() + Math.random(),
+        name,
+        nombre: name,
+        qty,
+        cant: qty,
+        quantity: qty,
+        unitPrice,
+        precioUnitario: unitPrice,
+        cost,
+        costoUnitario: cost,
+        costo: cost,
+        totalPrice,
+        precioTotal: totalPrice,
+        subtotal: totalPrice,
+        costoTotal,
+        detail,
+        category,
+        cat: category
+      };
+    });
 
     const total = Number(editingSale.total) || 0;
     const totalCost = Number(editingSale.totalCost) || 0;
@@ -2332,7 +2497,7 @@ export default function App() {
       totalCost,
       senaAmount,
       profit,
-      items: editingSale.items || [],
+      items: normalizedItems,
       attachments: editingSale.attachments || []
     };
 
@@ -2347,9 +2512,11 @@ export default function App() {
       const updatedFabList = [...fabList];
       updatedFabList[fabIdx] = {
         ...updatedFabList[fabIdx],
+        client: updatedOrder.client || updatedFabList[fabIdx].client,
         deliveryDate: updatedOrder.deliveryDate || updatedFabList[fabIdx].deliveryDate,
         notes: updatedOrder.notes || updatedFabList[fabIdx].notes,
         totalCost: totalCost,
+        items: normalizedItems,
         attachments: updatedOrder.attachments ? [...updatedOrder.attachments] : []
       };
       setFabList(updatedFabList);
@@ -2640,6 +2807,126 @@ export default function App() {
     alert('¡Ingreso registrado con éxito en Tesorería!');
   };
 
+  const submitNewMovement = (e: React.FormEvent) => {
+    e.preventDefault();
+    const baseAmt = parseFloat(newMovementModalForm.amount);
+    if (isNaN(baseAmt) || baseAmt <= 0) {
+      alert('Por favor ingrese un monto válido mayor a 0.');
+      return;
+    }
+    const ivaPct = parseFloat(newMovementModalForm.iva || '0') || 0;
+    const totalAmount = baseAmt * (1 + ivaPct / 100);
+
+    if (newMovementType === 'egreso') {
+      if (!newMovementModalForm.description.trim()) {
+        alert('Por favor ingrese la descripción del gasto o proveedor.');
+        return;
+      }
+      const cost = {
+        id: Date.now(),
+        category: newMovementModalForm.category || 'Otros',
+        description: newMovementModalForm.description.trim(),
+        amount: totalAmount,
+        baseAmount: baseAmt,
+        ivaPct: ivaPct,
+        currency: newMovementModalForm.currency,
+        account: newMovementModalForm.account,
+        date: newMovementModalForm.date,
+        pendingPayment: newMovementModalForm.pendingPayment,
+        month: newMovementModalForm.date.substring(0, 7)
+      };
+      const updated = [...fixedCosts, cost];
+      setFixedCosts(updated);
+      localStorage.setItem('barda_fixed_costs', JSON.stringify(updated));
+      alert('¡Gasto / Egreso registrado con éxito en el Libro de Movimientos!');
+    } else {
+      // INGRESO
+      if (newMovementModalForm.incomeMode === 'saldo' && newMovementModalForm.orderId !== null) {
+        const order = sales.find(s => s.id === newMovementModalForm.orderId);
+        if (!order) {
+          alert('No se encontró la orden de pedido seleccionada.');
+          return;
+        }
+        const newPay = {
+          id: `balance-${order.id}-${Date.now()}`,
+          orderId: order.id,
+          orderNum: order.orderNum,
+          clientName: order.client?.nombre || 'Consumidor Final',
+          date: newMovementModalForm.date,
+          amount: totalAmount,
+          baseAmount: baseAmt,
+          ivaPct: ivaPct,
+          currency: newMovementModalForm.currency || 'ARS',
+          type: 'Saldo',
+          account: newMovementModalForm.account,
+          paymentMethod: order.paymentMethod || newMovementModalForm.account,
+          pendingPayment: newMovementModalForm.pendingPayment,
+          note: newMovementModalForm.note || newMovementModalForm.description
+        };
+        const updatedLedger = [...paymentsLedger, newPay];
+        setPaymentsLedger(updatedLedger);
+        localStorage.setItem('barda_payments_ledger', JSON.stringify(updatedLedger));
+
+        const updatedSales = sales.map(s => {
+          if (s.id === order.id) {
+            const newSena = (s.senaAmount || 0) + totalAmount;
+            const newPayStatus = newSena >= s.total ? 'Pagado' : 'Señado';
+            return {
+              ...s,
+              senaAmount: Math.min(s.total, newSena),
+              paymentStatus: newPayStatus
+            };
+          }
+          return s;
+        });
+        setSales(updatedSales);
+        localStorage.setItem('barda_sales_orders', JSON.stringify(updatedSales));
+        alert('¡Cobro de saldo registrado con éxito en el Libro de Movimientos!');
+      } else {
+        // Ingreso Directo
+        if (!newMovementModalForm.description.trim()) {
+          alert('Por favor ingrese el concepto o cliente del ingreso.');
+          return;
+        }
+        const newIncome = {
+          id: `direct-inc-${Date.now()}`,
+          orderId: null,
+          orderNum: (newMovementModalForm.category || 'INGRESO').toUpperCase(),
+          clientName: newMovementModalForm.description.trim(),
+          date: newMovementModalForm.date,
+          amount: totalAmount,
+          baseAmount: baseAmt,
+          ivaPct: ivaPct,
+          currency: newMovementModalForm.currency,
+          type: 'Ingreso Directo',
+          account: newMovementModalForm.account,
+          paymentMethod: newMovementModalForm.account,
+          pendingPayment: newMovementModalForm.pendingPayment,
+          note: newMovementModalForm.note
+        };
+        const updatedLedger = [...paymentsLedger, newIncome];
+        setPaymentsLedger(updatedLedger);
+        localStorage.setItem('barda_payments_ledger', JSON.stringify(updatedLedger));
+        alert('¡Ingreso registrado con éxito en el Libro de Movimientos!');
+      }
+    }
+
+    setShowNewMovementModal(false);
+    setNewMovementModalForm({
+      incomeMode: 'directo',
+      orderId: null,
+      date: new Date().toISOString().split('T')[0],
+      category: 'Aporte de Capital',
+      description: '',
+      amount: '',
+      iva: '0',
+      currency: 'ARS',
+      account: 'Efectivo',
+      pendingPayment: false,
+      note: ''
+    });
+  };
+
   const exportToCSV = (type: 'pl' | 'payments' | 'outstanding', filteredPaymentsList: any[], filteredFixedCostsList: any[], totalVentasVal: number, totalCostoVariableVal: number, totalCostoFijoVal: number) => {
     let csvContent = '\uFEFF'; // UTF-8 BOM
     let filename = '';
@@ -2648,7 +2935,7 @@ export default function App() {
       filename = `Barda_Reporte_Ganancias_${finanzasYear}_${finanzasMonth}.csv`;
       csvContent += 'Barda Home - Reporte de Pérdidas y Ganancias (P&L)\n';
       csvContent += `Período:;Año: ${finanzasYear} - Mes: ${finanzasMonth}\n\n`;
-      csvContent += 'Métrica;Monto ($)\n';
+      csvContent += 'Métrica;Monto (AR$)\n';
       csvContent += `Ventas Pactadas Totales;${totalVentasVal}\n`;
       csvContent += `Costo de Fabricación (Variable);-${totalCostoVariableVal}\n`;
       csvContent += `Margen de Contribución Económica;${totalVentasVal - totalCostoVariableVal}\n`;
@@ -2656,7 +2943,7 @@ export default function App() {
       csvContent += `Ganancia Operativa (Accrual);${totalVentasVal - totalCostoVariableVal - totalCostoFijoVal}\n\n`;
       
       csvContent += 'Desglose de Costos Fijos:\n';
-      csvContent += 'Categoría;Descripción;Monto ($)\n';
+      csvContent += 'Categoría;Descripción;Monto (AR$)\n';
       filteredFixedCostsList.forEach(c => {
         csvContent += `"${c.category}";"${c.description || ''}";${c.amount}\n`;
       });
@@ -3080,11 +3367,42 @@ export default function App() {
   const [salesPayFilter, setSalesPayFilter] = useState('Todos');
   const [salesMonthFilter, setSalesMonthFilter] = useState('Todos');
   const [salesYearFilter, setSalesYearFilter] = useState('Todos');
+  const [showSalesFilterMenu, setShowSalesFilterMenu] = useState(false);
+  const [activeSaleRowMenuId, setActiveSaleRowMenuId] = useState<string | number | null>(null);
   const [expandedOrders, setExpandedOrders] = useState<{[orderId: number]: boolean}>({});
 
+  const exportSalesOrdersToCSV = (salesList: any[]) => {
+    let csvContent = '\uFEFF'; // UTF-8 BOM
+    const filename = `Barda_Listado_Ventas_${new Date().toISOString().split('T')[0]}.csv`;
+    csvContent += 'Barda Home - Listado de Ventas y Pedidos\n\n';
+    csvContent += 'Pedido;Fecha;Cliente;Teléfono;Dirección;Categorías;Productos;Total;Seña;Saldo;Estado Entrega;Estado Pago;Fecha Entrega;Notas\n';
+    salesList.forEach(s => {
+      const remaining = (s.total || 0) - (s.senaAmount || 0);
+      const cats = Array.from(new Set(s.items?.map((it: any) => it.category || it.cat || 'Otros') || [])).join(', ');
+      const prods = (s.items || []).map((it: any) => `${it.qty || it.cant || 1}x ${it.name || it.nombre || ''}`).join(' | ');
+      csvContent += `${s.orderNum};${s.date || ''};"${s.client?.nombre || 'Consumidor Final'}";"${s.client?.telefono || ''}";"${s.client?.direccion || ''}";"${cats}";"${prods}";${s.total || 0};${s.senaAmount || 0};${remaining};"${s.status || ''}";"${s.paymentStatus || ''}";"${s.deliveryDate || ''}";"${(s.notes || '').replace(/"/g, '""')}"\n`;
+    });
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    if (link.download !== undefined) {
+      const url = URL.createObjectURL(blob);
+      link.setAttribute('href', url);
+      link.setAttribute('download', filename);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+  };
+
   const filteredSales = sales.filter(s => {
-    const matchName = s.client.nombre?.toLowerCase().includes(salesSearch.toLowerCase()) || 
-                      s.orderNum?.toLowerCase().includes(salesSearch.toLowerCase());
+    const searchLower = salesSearch.toLowerCase().trim();
+    const matchName = !searchLower || 
+                      s.client?.nombre?.toLowerCase().includes(searchLower) || 
+                      s.orderNum?.toLowerCase().includes(searchLower) ||
+                      s.client?.telefono?.toLowerCase().includes(searchLower) ||
+                      s.client?.direccion?.toLowerCase().includes(searchLower) ||
+                      s.items?.some((it: any) => (it.name || it.nombre || '').toLowerCase().includes(searchLower) || (it.detail || it.medidas || '').toLowerCase().includes(searchLower));
     const matchStatus = salesStatusFilter === 'Todos' || s.status === salesStatusFilter;
     const matchPay = salesPayFilter === 'Todos' || s.paymentStatus === salesPayFilter;
     
@@ -4112,7 +4430,7 @@ export default function App() {
 
                     <div className="flex items-center justify-between mt-2 pt-4 border-t border-sand">
                       <div className="flex flex-col gap-1.5">
-                        <label className="text-[10px] tracking-wider uppercase text-stone font-bold">Precio Unitario ($)</label>
+                        <label className="text-[10px] tracking-wider uppercase text-stone font-bold">Precio Unitario (AR$)</label>
                         <input type="text" placeholder="Ej. 150000" value={otroForm.precio} onChange={e => setOtroForm({ ...otroForm, precio: e.target.value })} className="text-xs py-1.5 px-3 border border-sand rounded-lg bg-white text-brown font-sans focus:ring-1 focus:ring-terra focus:outline-none w-44 font-medium shadow-xs" />
                       </div>
                       <div className="flex items-center gap-3">
@@ -4208,7 +4526,7 @@ export default function App() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
                     <div className="flex flex-col gap-1.5">
                       <label className="text-[10px] tracking-wider uppercase text-stone font-bold">
-                        {discountType === '%' ? 'Porcentaje de Descuento (%)' : 'Monto de Descuento ($)'}
+                        {discountType === '%' ? 'Porcentaje de Descuento (%)' : 'Monto de Descuento (AR$)'}
                       </label>
                       <div className="flex items-center gap-2">
                         <div className="relative flex-1">
@@ -4217,7 +4535,7 @@ export default function App() {
                             min="0"
                             max={discountType === '%' ? 100 : undefined}
                             step={discountType === '%' ? 1 : 1000}
-                            placeholder={discountType === '%' ? '0' : '$ 0'}
+                            placeholder={discountType === '%' ? '0' : 'AR$ 0'}
                             value={discountValue === 0 ? '' : discountValue}
                             onChange={e => {
                               const val = parseFloat(e.target.value);
@@ -4634,7 +4952,7 @@ export default function App() {
                                   </td>
                                   <td className="p-2 text-center">
                                     <div className="flex items-center justify-center gap-1">
-                                      <span className="text-stone text-[10px]">$</span>
+                                      <span className="text-stone text-[10px] font-bold">AR$</span>
                                       <input 
                                         type="number" 
                                         value={uCost} 
@@ -4858,7 +5176,7 @@ export default function App() {
                       </div>
 
                       <div className="flex flex-col gap-1.5">
-                        <label className="text-[10px] uppercase tracking-wider text-stone font-bold">Precio Unitario ($)</label>
+                        <label className="text-[10px] uppercase tracking-wider text-stone font-bold">Precio Unitario (AR$)</label>
                         <input
                           type="number"
                           min="0"
@@ -5011,8 +5329,12 @@ export default function App() {
                     ? 'Órdenes:'
                     : 'Registros:'}
                 </span>
-                <span className="text-xs font-mono font-bold text-terra bg-[#1A0C05] px-2 py-0.5 rounded-md border border-cream/10">
-                  {filteredSales.length} {filteredSales.length === 1 ? 'pedido' : 'pedidos'}
+                <span className="text-sm font-bold text-cream font-mono">
+                  {ventasSubTab === 'remitos'
+                    ? sales.filter(s => s.status === 'Entregado').length
+                    : ventasSubTab === 'fabricacion'
+                    ? fabList.length
+                    : sales.length}
                 </span>
               </div>
             </div>
@@ -5021,759 +5343,689 @@ export default function App() {
             {ventasSubTab === 'ventas' && currentUser.permissions.ventas.view && (
               <div className="flex flex-col gap-6">
                 {!canEditVentas && (
-              <div className="p-4 bg-amber-50/50 border border-terra/20 text-brown rounded-xl flex items-center gap-2.5 text-xs font-medium shadow-sm">
-                <AlertCircle className="w-5 h-5 text-terra shrink-0" />
-                <span><strong>Modo de Solo Lectura:</strong> No tienes permisos de edición para cambiar estados de pedidos, registrar pagos o eliminar ventas.</span>
-              </div>
-            )}
-            {/* 1. FILTERS & SEARCH BAR (ESTILO CONTAGRAM / PRESUPUESTOS) */}
-            <div className="bg-white border border-sand rounded-xl p-3.5 shadow-xs flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
-              {/* SEARCH INPUT */}
-              <div className="relative flex-1 min-w-[220px]">
-                <Search className="w-4 h-4 text-stone absolute left-3 top-1/2 -translate-y-1/2" />
-                <input 
-                  type="text" 
-                  placeholder="Buscar por cliente o nro de pedido..." 
-                  value={salesSearch}
-                  onChange={e => setSalesSearch(e.target.value)}
-                  className="w-full text-xs py-2 pl-9 pr-3 border border-sand rounded-lg bg-light-cream/30 text-brown focus:outline-none focus:border-terra font-sans"
-                />
-              </div>
-
-              {/* DROPDOWN FILTERS */}
-              <div className="flex flex-wrap items-center gap-2 text-xs">
-                {/* ESTADO ENTREGA */}
-                <div className="flex items-center gap-1.5 bg-light-cream/60 border border-sand/60 px-2.5 py-1.5 rounded-lg">
-                  <span className="text-[11px] font-bold text-stone">Entrega:</span>
-                  <select 
-                    value={salesStatusFilter} 
-                    onChange={e => setSalesStatusFilter(e.target.value)} 
-                    className="bg-white border border-sand/60 rounded px-2 py-0.5 text-xs font-bold text-brown focus:outline-none focus:border-terra cursor-pointer"
-                  >
-                    <option value="Todos">Todos</option>
-                    <option value="Pendiente">Pendiente</option>
-                    <option value="En Producción">En Producción</option>
-                    <option value="Listo para Entrega">Listo para Entrega</option>
-                    <option value="Entregado">Entregado</option>
-                  </select>
-                </div>
-
-                {/* ESTADO PAGO */}
-                <div className="flex items-center gap-1.5 bg-light-cream/60 border border-sand/60 px-2.5 py-1.5 rounded-lg">
-                  <span className="text-[11px] font-bold text-stone">Pago:</span>
-                  <select 
-                    value={salesPayFilter} 
-                    onChange={e => setSalesPayFilter(e.target.value)} 
-                    className="bg-white border border-sand/60 rounded px-2 py-0.5 text-xs font-bold text-brown focus:outline-none focus:border-terra cursor-pointer"
-                  >
-                    <option value="Todos">Todos</option>
-                    <option value="Pendiente">Pendiente</option>
-                    <option value="Señado">Señado</option>
-                    <option value="Pagado">Pagado</option>
-                  </select>
-                </div>
-
-                {/* MES */}
-                <div className="flex items-center gap-1.5 bg-light-cream/60 border border-sand/60 px-2.5 py-1.5 rounded-lg">
-                  <span className="text-[11px] font-bold text-stone">Mes:</span>
-                  <select 
-                    value={salesMonthFilter} 
-                    onChange={e => setSalesMonthFilter(e.target.value)} 
-                    className="bg-white border border-sand/60 rounded px-2 py-0.5 text-xs font-bold text-brown focus:outline-none focus:border-terra cursor-pointer"
-                  >
-                    <option value="Todos">Todos</option>
-                    <option value="01">Enero</option>
-                    <option value="02">Febrero</option>
-                    <option value="03">Marzo</option>
-                    <option value="04">Abril</option>
-                    <option value="05">Mayo</option>
-                    <option value="06">Junio</option>
-                    <option value="07">Julio</option>
-                    <option value="08">Agosto</option>
-                    <option value="09">Septiembre</option>
-                    <option value="10">Octubre</option>
-                    <option value="11">Noviembre</option>
-                    <option value="12">Diciembre</option>
-                  </select>
-                </div>
-
-                {/* AÑO */}
-                <div className="flex items-center gap-1.5 bg-light-cream/60 border border-sand/60 px-2.5 py-1.5 rounded-lg">
-                  <span className="text-[11px] font-bold text-stone">Año:</span>
-                  <select 
-                    value={salesYearFilter} 
-                    onChange={e => setSalesYearFilter(e.target.value)} 
-                    className="bg-white border border-sand/60 rounded px-2 py-0.5 text-xs font-bold text-brown focus:outline-none focus:border-terra cursor-pointer"
-                  >
-                    <option value="Todos">Todos</option>
-                    {yearsList.map(y => (
-                      <option key={y} value={y}>{y}</option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* RESET BUTTON */}
-                {(salesSearch || salesStatusFilter !== 'Todos' || salesPayFilter !== 'Todos' || salesMonthFilter !== 'Todos' || salesYearFilter !== 'Todos') && (
-                  <button
-                    onClick={() => {
-                      setSalesSearch('');
-                      setSalesStatusFilter('Todos');
-                      setSalesPayFilter('Todos');
-                      setSalesMonthFilter('Todos');
-                      setSalesYearFilter('Todos');
-                    }}
-                    className="p-2 text-stone hover:text-terra border border-sand rounded-lg bg-white hover:bg-cream/40 transition-all cursor-pointer"
-                    title="Limpiar Filtros"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                  </button>
+                  <div className="p-4 bg-amber-50/50 border border-terra/20 text-brown rounded-xl flex items-center gap-2.5 text-xs font-medium shadow-sm">
+                    <AlertCircle className="w-5 h-5 text-terra shrink-0" />
+                    <span><strong>Modo de Solo Lectura:</strong> No tienes permisos de edición para cambiar estados de pedidos, registrar pagos o eliminar ventas.</span>
+                  </div>
                 )}
-              </div>
-            </div>
 
-            {/* 2. KPI SUMMARY BAR (ESTILO CONTAGRAM / PRESUPUESTOS) */}
-            <div className="bg-white border border-sand rounded-2xl p-4 shadow-sm">
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 divide-y sm:divide-y-0 lg:divide-x divide-sand/50 gap-4 lg:gap-0">
-                
-                {/* CARD 1: ENTREGADOS */}
-                <div className="flex flex-col justify-between px-3 py-1">
-                  <div className="text-xs font-bold text-stone flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-blue-600"></span>
-                    <span>Entregados ({salesMetrics.entregadosCount})</span>
-                  </div>
-                  <div className="mt-2">
-                    <span className="text-lg sm:text-xl font-serif font-bold text-blue-700">
-                      {fmt(salesMetrics.entregadosTotal)}
-                    </span>
+                {/* 1. KPI SUMMARY CARDS (TOP METRICS) */}
+                <div className="bg-white border border-sand rounded-2xl p-4 shadow-sm">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 divide-y sm:divide-y-0 lg:divide-x divide-sand/50 gap-4 lg:gap-0">
+                    
+                    {/* CARD 1: ENTREGADOS */}
+                    <div className="flex flex-col justify-between px-3 py-1">
+                      <div className="text-xs font-bold text-stone flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-blue-600"></span>
+                        <span>Entregados ({salesMetrics.entregadosCount})</span>
+                      </div>
+                      <div className="mt-2">
+                        <span className="text-lg sm:text-xl font-serif font-bold text-blue-700">
+                          {fmt(salesMetrics.entregadosTotal)}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* CARD 2: LISTO PARA ENTREGA */}
+                    <div className="flex flex-col justify-between px-3 py-1">
+                      <div className="text-xs font-bold text-stone flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-emerald-600"></span>
+                        <span>Listos p/ Entrega ({salesMetrics.listosCount})</span>
+                      </div>
+                      <div className="mt-2">
+                        <span className="text-lg sm:text-xl font-serif font-bold text-emerald-700">
+                          {fmt(salesMetrics.listosTotal)}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* CARD 3: EN PRODUCCION */}
+                    <div className="flex flex-col justify-between px-3 py-1">
+                      <div className="text-xs font-bold text-stone flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                        <span>En Producción ({salesMetrics.produccionCount})</span>
+                      </div>
+                      <div className="mt-2">
+                        <span className="text-lg sm:text-xl font-serif font-bold text-amber-700">
+                          {fmt(salesMetrics.produccionTotal)}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* CARD 4: PENDIENTES */}
+                    <div className="flex flex-col justify-between px-3 py-1">
+                      <div className="text-xs font-bold text-stone flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-rose-600"></span>
+                        <span>Pendientes ({salesMetrics.pendientesCount})</span>
+                      </div>
+                      <div className="mt-2">
+                        <span className="text-lg sm:text-xl font-serif font-bold text-rose-700">
+                          {fmt(salesMetrics.pendientesTotal)}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* CARD 5: TOTAL VENTAS */}
+                    <div className="flex flex-col justify-between px-3 py-1 bg-cream/30 rounded-xl lg:rounded-none">
+                      <div className="text-xs font-bold text-brown flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-brown"></span>
+                        <span>Total Ventas ({salesMetrics.totalCount})</span>
+                      </div>
+                      <div className="mt-2">
+                        <span className="text-lg sm:text-xl font-serif font-bold text-brown">
+                          {fmt(salesMetrics.totalMonto)}
+                        </span>
+                      </div>
+                    </div>
+
                   </div>
                 </div>
 
-                {/* CARD 2: LISTO PARA ENTREGA */}
-                <div className="flex flex-col justify-between px-3 py-1">
-                  <div className="text-xs font-bold text-stone flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-emerald-600"></span>
-                    <span>Listos p/ Entrega ({salesMetrics.listosCount})</span>
-                  </div>
-                  <div className="mt-2">
-                    <span className="text-lg sm:text-xl font-serif font-bold text-emerald-700">
-                      {fmt(salesMetrics.listosTotal)}
-                    </span>
-                  </div>
-                </div>
+                {/* 2. MAIN DATAGRID CARD (ESTILO LIBRO DE MOVIMIENTOS) */}
+                <div className="bg-white border border-sand rounded-2xl shadow-xs overflow-visible">
+                  {/* CARD TOOLBAR */}
+                  <div className="p-4 border-b border-sand flex flex-col md:flex-row md:items-center justify-between gap-3 bg-light-cream/30">
+                    {/* TITLE & BADGE */}
+                    <div className="flex items-center gap-2.5">
+                      <ShoppingBag className="w-4 h-4 text-terra" />
+                      <h3 className="font-serif text-base font-bold text-brown">
+                        Listado de Ventas
+                      </h3>
+                      <span className="text-xs font-bold text-stone bg-white px-2.5 py-0.5 rounded-full border border-sand">
+                        {filteredSales.length} {filteredSales.length === 1 ? 'pedido' : 'pedidos'}
+                      </span>
+                    </div>
 
-                {/* CARD 3: EN PRODUCCION */}
-                <div className="flex flex-col justify-between px-3 py-1">
-                  <div className="text-xs font-bold text-stone flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-                    <span>En Producción ({salesMetrics.produccionCount})</span>
-                  </div>
-                  <div className="mt-2">
-                    <span className="text-lg sm:text-xl font-serif font-bold text-amber-700">
-                      {fmt(salesMetrics.produccionTotal)}
-                    </span>
-                  </div>
-                </div>
-
-                {/* CARD 4: PENDIENTES */}
-                <div className="flex flex-col justify-between px-3 py-1">
-                  <div className="text-xs font-bold text-stone flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-rose-600"></span>
-                    <span>Pendientes ({salesMetrics.pendientesCount})</span>
-                  </div>
-                  <div className="mt-2">
-                    <span className="text-lg sm:text-xl font-serif font-bold text-rose-700">
-                      {fmt(salesMetrics.pendientesTotal)}
-                    </span>
-                  </div>
-                </div>
-
-                {/* CARD 5: TOTAL VENTAS */}
-                <div className="flex flex-col justify-between px-3 py-1 bg-cream/30 rounded-xl lg:rounded-none">
-                  <div className="text-xs font-bold text-brown flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-brown"></span>
-                    <span>Total Ventas ({salesMetrics.totalCount})</span>
-                  </div>
-                  <div className="mt-2">
-                    <span className="text-lg sm:text-xl font-serif font-bold text-brown">
-                      {fmt(salesMetrics.totalMonto)}
-                    </span>
-                  </div>
-                </div>
-
-              </div>
-            </div>
-
-            {filteredSales.length === 0 ? (
-              <div className="bg-white border border-sand rounded-xl p-12 text-center text-stone italic font-serif">
-                No se encontraron órdenes de pedido guardadas.
-              </div>
-            ) : (
-              <div className="bg-white border border-sand rounded-2xl shadow-sm overflow-hidden">
-                {/* TITLE BAR ABOVE TABLE */}
-                <div className="px-5 py-4 border-b border-sand flex items-center justify-between bg-light-cream/40">
-                  <div className="flex items-center gap-2">
-                    <ShoppingBag className="w-4 h-4 text-terra" />
-                    <h3 className="font-serif text-base font-bold text-brown">
-                      Listado de Ventas
-                    </h3>
-                    <span className="text-xs font-bold text-stone bg-white px-2.5 py-0.5 rounded-full border border-sand">
-                      {filteredSales.length} resultado(s)
-                    </span>
-                  </div>
-
-                  <span className="text-[11px] font-bold text-stone hidden sm:inline">
-                    Hacé clic en la fila para desplegar el detalle del pedido
-                  </span>
-                </div>
-
-                {/* Desktop/Tablet Table view */}
-                <div className="hidden md:block overflow-x-auto">
-                  <table className="w-full text-left border-collapse text-xs">
-                    <thead>
-                      <tr className="bg-[#3D1F0D] text-cream text-[11px] font-bold uppercase tracking-wider">
-                        <th className="py-3 px-4">Cliente / Ref.</th>
-                        <th className="py-3 px-4">Fecha Pedido</th>
-                        <th className="py-3 px-4">Fecha Entrega</th>
-                        <th className="py-3 px-4">Categorías</th>
-                        <th className="py-3 px-4 text-right">Total</th>
-                        <th className="py-3 px-4 text-right">Saldo Restante</th>
-                        <th className="py-3 px-4 text-center">Estados</th>
-                        <th className="py-3 px-4 text-center">Detalle</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-sand/40">
-                      {filteredSales.map(order => {
-                        const isExpanded = !!expandedOrders[order.id];
-                        const orderCategories = Array.from(new Set(order.items?.map((it: any) => it.category || 'Otros') || [])).join(', ');
-                        const remainingBalance = order.total - (order.senaAmount || 0);
-                        
-                        return (
-                          <React.Fragment key={order.id}>
-                            <tr 
-                              onClick={() => setExpandedOrders(prev => ({ ...prev, [order.id]: !prev[order.id] }))}
-                              className={`border-b border-sand/40 hover:bg-cream/20 transition-all cursor-pointer ${isExpanded ? 'bg-cream/10' : ''}`}
-                            >
-                              <td className="py-3.5 px-4">
-                                <div className="font-serif text-xs font-bold text-brown flex items-center gap-1.5">
-                                  <span>{order.client?.nombre || 'Consumidor Final'}</span>
-                                  {order.attachments && order.attachments.length > 0 && (
-                                    <span 
-                                      className="inline-flex items-center gap-1 bg-amber-100 text-brown border border-sand px-1.5 py-0.5 rounded-full text-[9px] font-extrabold shadow-2xs"
-                                      title={`${order.attachments.length} archivo(s) / plano(s) adjunto(s)`}
-                                    >
-                                      <Paperclip className="w-2.5 h-2.5 text-terra" />
-                                      <span>{order.attachments.length}</span>
-                                    </span>
-                                  )}
-                                </div>
-                                <div className="font-mono text-[9px] text-terra mt-0.5 font-bold">{order.orderNum}</div>
-                              </td>
-                              <td className="py-3.5 px-4 text-xs text-stone font-mono">
-                                {fmtDate(order.date)}
-                              </td>
-                              <td className="py-3.5 px-4 text-xs text-stone font-semibold">
-                                {order.deliveryDate || '—'}
-                              </td>
-                              <td className="py-3.5 px-4 text-xs text-stone">
-                                <span className="px-2 py-0.5 bg-sand/30 rounded text-[10px] font-bold text-brown">
-                                  {orderCategories || 'Otros'}
-                                </span>
-                              </td>
-                              <td className="py-3.5 px-4 text-right text-xs font-bold text-brown font-mono">
-                                {fmt(order.total)}
-                              </td>
-                              <td className="py-3.5 px-4 text-right text-xs font-bold text-terra font-mono">
-                                {fmt(remainingBalance)}
-                              </td>
-                              <td className="py-3.5 px-4">
-                                <div className="flex flex-col gap-1 items-center">
-                                  <span className={`inline-block text-[10px] px-2.5 py-0.5 rounded-lg border font-bold uppercase tracking-wider ${
-                                    order.status === 'Entregado' ? 'bg-blue-600/10 text-blue-700 border-blue-600/30' :
-                                    order.status === 'Listo para Entrega' ? 'bg-emerald-600/10 text-emerald-700 border-emerald-600/30' :
-                                    order.status === 'En Producción' ? 'bg-amber-500/10 text-amber-700 border-amber-500/30' :
-                                    'bg-rose-600/10 text-rose-700 border-rose-600/30'
-                                  }`}>
-                                    {order.status}
-                                  </span>
-                                  <span className={`inline-block text-[10px] px-2.5 py-0.5 rounded-lg border font-bold uppercase tracking-wider ${
-                                    order.paymentStatus === 'Pagado' ? 'bg-emerald-600/10 text-emerald-700 border-emerald-600/30' :
-                                    order.paymentStatus === 'Señado' ? 'bg-amber-500/10 text-amber-700 border-amber-500/30' :
-                                    'bg-stone/10 text-stone border-stone/30'
-                                  }`}>
-                                    {order.paymentStatus}
-                                  </span>
-                                </div>
-                              </td>
-                              <td className="py-3.5 px-4 text-center">
-                                <button className="text-stone hover:text-terra transition-all">
-                                  {isExpanded ? <ChevronUp className="w-4 h-4 mx-auto" /> : <ChevronDown className="w-4 h-4 mx-auto" />}
-                                </button>
-                              </td>
-                            </tr>
-
-                            {/* Expanded Panel for Desktop */}
-                            {isExpanded && (
-                              <tr onClick={e => e.stopPropagation()}>
-                                <td colSpan={8} className="p-0 bg-light-cream/10 border-b border-sand">
-                                  <div className="p-5 flex flex-col md:flex-row gap-6">
-                                    {/* Column 1: Product detail list */}
-                                    <div className="flex-1 min-w-[250px] bg-white border border-sand/60 rounded-xl p-4 shadow-2xs">
-                                      <h5 className="text-[10px] uppercase font-bold text-stone tracking-wider border-b border-sand pb-1.5 mb-2.5">Detalle de Productos</h5>
-                                      <ul className="divide-y divide-sand/30 flex flex-col gap-1.5">
-                                        {order.items?.map((it: any, index: number) => (
-                                          <li key={index} className="pt-1.5 first:pt-0 flex justify-between items-start text-xs">
-                                            <div>
-                                              <span className="font-bold text-brown">{it.qty}x</span> <span className="font-medium text-stone">{it.name}</span>
-                                              <p className="text-[10px] text-stone italic mt-0.5">{it.detail}</p>
-                                            </div>
-                                            <span className="text-[9px] uppercase font-bold text-stone px-1.5 py-0.5 bg-sand/20 rounded shrink-0">{it.category}</span>
-                                          </li>
-                                        ))}
-                                      </ul>
-                                    </div>
-
-                                    {/* Column 2: Financial summary and Notes */}
-                                    <div className="flex-1 min-w-[250px] flex flex-col gap-4">
-                                      <div className="bg-white border border-sand/60 rounded-xl p-4 shadow-2xs">
-                                        <h5 className="text-[10px] uppercase font-bold text-stone tracking-wider border-b border-sand pb-1.5 mb-2.5">Resumen Financiero</h5>
-                                        <div className="grid grid-cols-2 gap-3 text-xs">
-                                          <div>
-                                            <div className="text-[9px] uppercase text-stone font-semibold mb-0.5">Venta Total</div>
-                                            <div className="font-bold text-brown text-sm font-mono">{fmt(order.total)}</div>
-                                          </div>
-                                          <div>
-                                            <div className="text-[9px] uppercase text-stone font-semibold mb-0.5">Ganancia Est.</div>
-                                            <div className="font-bold text-emerald-700 text-sm font-mono">{fmt(order.profit)}</div>
-                                          </div>
-                                          <div className="col-span-2 bg-light-cream/40 border border-sand/40 rounded p-2.5 mt-1 flex flex-col gap-1.5">
-                                            <div className="flex justify-between text-xs">
-                                              <span className="text-stone">Seña abonada:</span>
-                                              <span className="font-bold text-brown font-mono">{fmt(order.senaAmount)}</span>
-                                            </div>
-                                            <div className="flex justify-between text-xs border-t border-sand/40 pt-1.5 mt-0.5 font-bold">
-                                              <span className="text-stone">Saldo Restante:</span>
-                                              <span className="text-terra font-mono">{fmt(remainingBalance)}</span>
-                                            </div>
-                                          </div>
-                                        </div>
-                                      </div>
-
-                                      {/* Notes */}
-                                      {order.notes && (
-                                        <div className="bg-amber-50/15 border border-sand rounded-xl p-3 text-xs italic text-stone">
-                                          <span className="block not-italic font-bold text-[9px] uppercase tracking-wider text-stone mb-1">Notas especiales:</span>
-                                          "{order.notes}"
-                                        </div>
-                                      )}
-
-                                      {/* Attachments Display */}
-                                      {order.attachments && order.attachments.length > 0 && (
-                                        <div className="bg-white border border-sand/60 rounded-xl p-3 shadow-2xs flex flex-col gap-2">
-                                          <div className="flex items-center justify-between border-b border-sand pb-1.5">
-                                            <h5 className="text-[10px] uppercase font-bold text-brown tracking-wider flex items-center gap-1">
-                                              <Paperclip className="w-3.5 h-3.5 text-terra" />
-                                              Adjuntos y Planos ({order.attachments.length})
-                                            </h5>
-                                          </div>
-                                          <div className="grid grid-cols-2 gap-2">
-                                            {order.attachments.map((att: any) => {
-                                              const isImg = att.type?.startsWith('image/') || att.dataUrl?.startsWith('data:image/');
-                                              return (
-                                                <div 
-                                                  key={att.id} 
-                                                  onClick={() => {
-                                                    if (isImg) {
-                                                      setPreviewImage({ url: att.dataUrl, name: att.name });
-                                                    } else {
-                                                      const link = document.createElement('a');
-                                                      link.href = att.dataUrl;
-                                                      link.download = att.name;
-                                                      link.click();
-                                                    }
-                                                  }}
-                                                  className="group bg-light-cream/40 hover:bg-cream/60 border border-sand/80 rounded-lg p-1.5 flex items-center gap-2 cursor-pointer transition-all overflow-hidden"
-                                                >
-                                                  {isImg ? (
-                                                    <img src={att.dataUrl} alt={att.name} className="w-10 h-10 object-cover rounded border border-sand shrink-0 group-hover:scale-105 transition-transform" />
-                                                  ) : (
-                                                    <div className="w-10 h-10 bg-terra/10 text-terra rounded flex items-center justify-center shrink-0">
-                                                      <File className="w-5 h-5" />
-                                                    </div>
-                                                  )}
-                                                  <div className="flex-1 min-w-0">
-                                                    <p className="text-[10px] font-bold text-brown truncate">{att.name}</p>
-                                                    <span className="text-[8px] font-bold text-terra flex items-center gap-0.5 mt-0.5">
-                                                      <Eye className="w-2.5 h-2.5" /> {isImg ? 'Ver foto' : 'Descargar'}
-                                                    </span>
-                                                  </div>
-                                                </div>
-                                              );
-                                            })}
-                                          </div>
-                                        </div>
-                                      )}
-                                    </div>
-
-                                    {/* Column 3: Actions & Status Selects */}
-                                    <div className="w-full md:w-64 flex flex-col gap-4">
-                                      <button
-                                        onClick={() => {
-                                          setEditingSale({
-                                            ...order,
-                                            items: order.items ? order.items.map((it: any) => ({ ...it })) : [],
-                                            client: { ...order.client },
-                                            attachments: order.attachments ? [...order.attachments] : []
-                                          });
-                                        }}
-                                        disabled={!canEditVentas}
-                                        className="w-full py-2.5 bg-amber-500/10 border border-amber-500/40 hover:bg-amber-500 hover:text-white text-brown rounded-xl text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed shadow-2xs group"
-                                      >
-                                        <Pencil className="w-3.5 h-3.5 text-terra group-hover:text-white" />
-                                        <span>Editar Venta / Precio / Costo</span>
-                                      </button>
-
-                                      <div className="bg-white border border-sand/60 rounded-xl p-4 shadow-2xs flex flex-col gap-3">
-                                        <h5 className="text-[10px] uppercase font-bold text-stone tracking-wider border-b border-sand pb-1.5">Actualizar Estados</h5>
-                                        
-                                        <div className="flex flex-col gap-1">
-                                          <label className="text-[9px] uppercase font-bold text-stone">Entrega</label>
-                                          <select 
-                                            value={order.status} 
-                                            onChange={e => updateOrderStatus(order.id, 'status', e.target.value)}
-                                            disabled={!canEditVentas}
-                                            className={`text-xs py-1 px-2 border rounded font-semibold focus:outline-none cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed ${
-                                              order.status === 'Entregado' ? 'bg-emerald-50 border-emerald-300 text-emerald-800' :
-                                              order.status === 'Listo para Entrega' ? 'bg-blue-50 border-blue-300 text-blue-800' :
-                                              order.status === 'En Producción' ? 'bg-amber-50 border-amber-300 text-amber-800' :
-                                              'bg-stone/5 border-sand text-stone'
-                                            }`}
-                                          >
-                                            <option value="Pendiente">Pendiente</option>
-                                            <option value="En Producción">En Producción</option>
-                                            <option value="Listo para Entrega">Listo para Entrega</option>
-                                            <option value="Entregado">Entregado</option>
-                                          </select>
-                                        </div>
-
-                                        <div className="flex flex-col gap-1">
-                                          <label className="text-[9px] uppercase font-bold text-stone">Pago</label>
-                                          <select 
-                                            value={order.paymentStatus} 
-                                            onChange={e => updateOrderStatus(order.id, 'paymentStatus', e.target.value)}
-                                            disabled={!canEditVentas}
-                                            className={`text-xs py-1 px-2 border rounded font-semibold focus:outline-none cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed ${
-                                              order.paymentStatus === 'Pagado' ? 'bg-emerald-50 border-emerald-300 text-emerald-800' :
-                                              order.paymentStatus === 'Señado' ? 'bg-amber-50 border-amber-300 text-amber-800' :
-                                              'bg-stone/5 border-sand text-stone'
-                                            }`}
-                                          >
-                                            <option value="Pendiente">Pendiente</option>
-                                            <option value="Señado">Señado</option>
-                                            <option value="Pagado">Pagado</option>
-                                          </select>
-                                        </div>
-                                      </div>
-
-                                      <div className="grid grid-cols-2 gap-2">
-                                        <button
-                                          onClick={() => {
-                                            setRemitoCliente({
-                                              nombre: order.client.nombre || '',
-                                              telefono: order.client.telefono || '',
-                                              cuit: order.client.cuit || '',
-                                              direccion: order.client.direccion || '',
-                                              cp: order.client.cp || '',
-                                              ciudad: order.client.ciudad || '',
-                                              provincia: order.client.provincia || ''
-                                            });
-                                            setRemitoNumero(order.orderNum ? order.orderNum.replace('PE-', '') : '');
-                                            setRemitoFecha(new Date().toISOString().split('T')[0]);
-                                            setRemitoDeliveryDate(order.deliveryDate || new Date().toISOString().split('T')[0]);
-                                            setRemitoItems(order.items.map((it: any) => ({
-                                              id: Date.now() + Math.random(),
-                                              name: it.name,
-                                              detail: it.detail,
-                                              unitPrice: it.unitPrice,
-                                              qty: it.qty,
-                                              category: it.category
-                                            })));
-                                            setActiveTab('ventas');
-                                            setVentasSubTab('remitos');
-                                          }}
-                                          className="py-2 border border-stone/40 hover:bg-stone/5 text-stone rounded-lg text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-1 transition-all duration-150"
-                                        >
-                                          <FileText className="w-3.5 h-3.5" /> Remito
-                                        </button>
-
-                                        <button
-                                          onClick={() => handleSendToTaller(order)}
-                                          className="py-2 border border-terra hover:bg-terra hover:text-white text-terra rounded-lg text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-1 transition-all duration-150"
-                                        >
-                                          <Wrench className="w-3.5 h-3.5" /> Taller
-                                        </button>
-                                      </div>
-
-                                      <button 
-                                        onClick={() => deleteOrder(order.id)}
-                                        disabled={!canEditVentas}
-                                        className="w-full py-2 border border-rose-200 hover:bg-rose-50 hover:text-error text-stone rounded-lg text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-1 transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed"
-                                      >
-                                        <Trash2 className="w-3.5 h-3.5" /> Eliminar Pedido
-                                      </button>
-                                    </div>
-                                  </div>
-                                </td>
-                              </tr>
-                            )}
-                          </React.Fragment>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* Mobile list view */}
-                <div className="block md:hidden divide-y divide-sand/40">
-                  {filteredSales.map(order => {
-                    const isExpanded = !!expandedOrders[order.id];
-                    const orderCategories = Array.from(new Set(order.items?.map((it: any) => it.category || 'Otros') || [])).join(', ');
-                    const remainingBalance = order.total - (order.senaAmount || 0);
-
-                    return (
-                      <div key={order.id} className="p-4 flex flex-col gap-2 bg-white">
-                        <div 
-                          className="flex justify-between items-start gap-2 cursor-pointer"
-                          onClick={() => setExpandedOrders(prev => ({ ...prev, [order.id]: !prev[order.id] }))}
+                    {/* ACTIONS & FILTERS TOOLBAR */}
+                    <div className="flex flex-wrap items-center gap-2">
+                      {/* FILTRAR DROPDOWN BUTTON */}
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setShowSalesFilterMenu(!showSalesFilterMenu)}
+                          className={`px-3 py-2 border rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                            (salesStatusFilter !== 'Todos' || salesPayFilter !== 'Todos' || salesMonthFilter !== 'Todos' || salesYearFilter !== 'Todos')
+                              ? 'bg-terra text-white border-terra shadow-2xs'
+                              : 'border-sand text-brown bg-white hover:bg-cream/40'
+                          }`}
                         >
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-[10px] font-mono text-terra font-bold">{order.orderNum}</span>
-                              {order.attachments && order.attachments.length > 0 && (
-                                <span className="inline-flex items-center gap-1 bg-amber-100 text-brown border border-sand px-1.5 py-0.5 rounded-full text-[9px] font-extrabold">
-                                  <Paperclip className="w-2.5 h-2.5 text-terra" />
-                                  <span>{order.attachments.length}</span>
+                          <Sliders className="w-3.5 h-3.5" />
+                          <span>Filtrar</span>
+                          {(salesStatusFilter !== 'Todos' || salesPayFilter !== 'Todos' || salesMonthFilter !== 'Todos' || salesYearFilter !== 'Todos') && (
+                            <span className="w-2 h-2 rounded-full bg-white animate-pulse ml-0.5" />
+                          )}
+                          <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showSalesFilterMenu ? 'rotate-180' : ''}`} />
+                        </button>
+
+                        {/* FILTER POPOVER */}
+                        {showSalesFilterMenu && (
+                          <>
+                            <div 
+                              className="fixed inset-0 z-20" 
+                              onClick={() => setShowSalesFilterMenu(false)}
+                            />
+                            <div className="absolute right-0 mt-2 w-72 bg-white border border-sand rounded-2xl shadow-xl z-30 p-4 flex flex-col gap-3 animate-fadeIn font-sans">
+                              <div className="flex items-center justify-between border-b border-sand pb-2">
+                                <span className="text-xs font-bold uppercase text-brown tracking-wider flex items-center gap-1.5">
+                                  <Sliders className="w-3.5 h-3.5 text-terra" /> Filtros Avanzados
                                 </span>
-                              )}
-                            </div>
-                            <h4 className="font-serif text-sm font-bold text-brown truncate">{order.client?.nombre || 'Consumidor Final'}</h4>
-                            <div className="flex flex-wrap gap-2 text-[10px] text-stone mt-1">
-                              <span>Pedido: {fmtDate(order.date)}</span>
-                              <span>•</span>
-                              <span className="font-semibold text-terra">Entrega: {order.deliveryDate || '—'}</span>
-                            </div>
-                            <div className="mt-1.5">
-                              <span className="px-1.5 py-0.5 bg-sand/30 rounded text-[9px] font-bold text-brown">
-                                {orderCategories || 'Otros'}
-                              </span>
-                            </div>
-                          </div>
-                          
-                          <div className="flex flex-col items-end gap-1.5 shrink-0">
-                            <div className="font-mono text-xs font-bold text-brown">{fmt(order.total)}</div>
-                            <div className="text-[10px] text-stone">Saldo: <span className="font-bold text-terra font-mono">{fmt(remainingBalance)}</span></div>
-                            <span className="text-[10px] text-stone mt-1">
-                              {isExpanded ? <ChevronUp className="w-3.5 h-3.5 inline text-terra" /> : <ChevronDown className="w-3.5 h-3.5 inline text-stone" />}
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Expanded details for Mobile */}
-                        {isExpanded && (
-                          <div className="mt-3 pt-3 border-t border-dashed border-sand flex flex-col gap-4 bg-light-cream/10 p-3 rounded-lg animate-fadeIn">
-                            {/* Products details */}
-                            <div className="text-xs bg-white border border-sand/40 rounded-lg p-2.5">
-                              <div className="font-bold text-brown mb-1.5 uppercase text-[9px] tracking-wider">Productos:</div>
-                              <ul className="flex flex-col gap-1.5">
-                                {order.items?.map((it: any, index: number) => (
-                                  <li key={index} className="flex justify-between items-start text-[11px]">
-                                    <div>
-                                      <strong className="text-brown">{it.qty}x</strong> {it.name}
-                                      <span className="block text-[10px] text-stone">{it.detail}</span>
-                                    </div>
-                                    <span className="text-[8px] bg-sand/20 font-bold px-1.5 py-0.5 rounded text-stone uppercase">{it.category}</span>
-                                  </li>
-                                ))}
-                              </ul>
-                            </div>
-
-                            {/* Financial */}
-                            <div className="text-xs bg-white border border-sand/40 rounded-lg p-2.5 flex flex-col gap-1">
-                              <div className="flex justify-between">
-                                <span className="text-stone">Ganancia Est.:</span>
-                                <span className="font-bold text-emerald-700 font-mono">{fmt(order.profit)}</span>
+                                {(salesStatusFilter !== 'Todos' || salesPayFilter !== 'Todos' || salesMonthFilter !== 'Todos' || salesYearFilter !== 'Todos') && (
+                                  <button
+                                    onClick={() => {
+                                      setSalesStatusFilter('Todos');
+                                      setSalesPayFilter('Todos');
+                                      setSalesMonthFilter('Todos');
+                                      setSalesYearFilter('Todos');
+                                    }}
+                                    className="text-[10px] font-bold text-terra hover:underline cursor-pointer"
+                                  >
+                                    Limpiar
+                                  </button>
+                                )}
                               </div>
-                              <div className="flex justify-between">
-                                <span className="text-stone">Seña abonada:</span>
-                                <span className="font-bold text-brown font-mono">{fmt(order.senaAmount)}</span>
-                              </div>
-                            </div>
 
-                            {order.notes && (
-                              <div className="text-[11px] text-stone bg-white p-2.5 rounded-lg border border-sand/40 italic">
-                                "{order.notes}"
-                              </div>
-                            )}
-
-                            {/* Attachments Display Mobile */}
-                            {order.attachments && order.attachments.length > 0 && (
-                              <div className="bg-white border border-sand/60 rounded-xl p-2.5 shadow-2xs flex flex-col gap-2">
-                                <div className="flex items-center justify-between border-b border-sand pb-1 text-[10px] uppercase font-bold text-brown">
-                                  <span className="flex items-center gap-1">
-                                    <Paperclip className="w-3 h-3 text-terra" />
-                                    Adjuntos ({order.attachments.length})
-                                  </span>
+                              <div className="flex flex-col gap-2.5 text-xs">
+                                {/* Estado Entrega */}
+                                <div className="flex flex-col gap-1">
+                                  <label className="text-[10px] uppercase font-bold text-stone">Estado Entrega</label>
+                                  <select
+                                    value={salesStatusFilter}
+                                    onChange={e => setSalesStatusFilter(e.target.value)}
+                                    className="w-full bg-light-cream/40 border border-sand rounded-lg px-2.5 py-1.5 text-xs font-semibold text-brown focus:outline-none focus:border-terra cursor-pointer"
+                                  >
+                                    <option value="Todos">Todos los Estados</option>
+                                    <option value="Pendiente">Pendiente</option>
+                                    <option value="En Producción">En Producción</option>
+                                    <option value="Listo para Entrega">Listo para Entrega</option>
+                                    <option value="Entregado">Entregado</option>
+                                  </select>
                                 </div>
-                                <div className="grid grid-cols-2 gap-1.5">
-                                  {order.attachments.map((att: any) => {
-                                    const isImg = att.type?.startsWith('image/') || att.dataUrl?.startsWith('data:image/');
-                                    return (
-                                      <div 
-                                        key={att.id} 
-                                        onClick={() => {
-                                          if (isImg) setPreviewImage({ url: att.dataUrl, name: att.name });
-                                          else {
-                                            const link = document.createElement('a');
-                                            link.href = att.dataUrl;
-                                            link.download = att.name;
-                                            link.click();
-                                          }
-                                        }}
-                                        className="bg-light-cream/40 border border-sand/80 rounded p-1 flex items-center gap-1.5 cursor-pointer"
-                                      >
-                                        {isImg ? (
-                                          <img src={att.dataUrl} alt={att.name} className="w-8 h-8 object-cover rounded border border-sand shrink-0" />
-                                        ) : (
-                                          <div className="w-8 h-8 bg-terra/10 text-terra rounded flex items-center justify-center shrink-0">
-                                            <File className="w-4 h-4" />
-                                          </div>
-                                        )}
-                                        <div className="flex-1 min-w-0">
-                                          <p className="text-[9px] font-bold text-brown truncate">{att.name}</p>
-                                        </div>
-                                      </div>
-                                    );
-                                  })}
+
+                                {/* Estado Pago */}
+                                <div className="flex flex-col gap-1">
+                                  <label className="text-[10px] uppercase font-bold text-stone">Estado Pago</label>
+                                  <select
+                                    value={salesPayFilter}
+                                    onChange={e => setSalesPayFilter(e.target.value)}
+                                    className="w-full bg-light-cream/40 border border-sand rounded-lg px-2.5 py-1.5 text-xs font-semibold text-brown focus:outline-none focus:border-terra cursor-pointer"
+                                  >
+                                    <option value="Todos">Todos los Pagos</option>
+                                    <option value="Pendiente">Pendiente</option>
+                                    <option value="Señado">Señado</option>
+                                    <option value="Pagado">Pagado</option>
+                                  </select>
+                                </div>
+
+                                {/* Mes */}
+                                <div className="flex flex-col gap-1">
+                                  <label className="text-[10px] uppercase font-bold text-stone">Mes</label>
+                                  <select
+                                    value={salesMonthFilter}
+                                    onChange={e => setSalesMonthFilter(e.target.value)}
+                                    className="w-full bg-light-cream/40 border border-sand rounded-lg px-2.5 py-1.5 text-xs font-semibold text-brown focus:outline-none focus:border-terra cursor-pointer"
+                                  >
+                                    <option value="Todos">Todos los Meses</option>
+                                    <option value="01">Enero</option>
+                                    <option value="02">Febrero</option>
+                                    <option value="03">Marzo</option>
+                                    <option value="04">Abril</option>
+                                    <option value="05">Mayo</option>
+                                    <option value="06">Junio</option>
+                                    <option value="07">Julio</option>
+                                    <option value="08">Agosto</option>
+                                    <option value="09">Septiembre</option>
+                                    <option value="10">Octubre</option>
+                                    <option value="11">Noviembre</option>
+                                    <option value="12">Diciembre</option>
+                                  </select>
+                                </div>
+
+                                {/* Año */}
+                                <div className="flex flex-col gap-1">
+                                  <label className="text-[10px] uppercase font-bold text-stone">Año</label>
+                                  <select
+                                    value={salesYearFilter}
+                                    onChange={e => setSalesYearFilter(e.target.value)}
+                                    className="w-full bg-light-cream/40 border border-sand rounded-lg px-2.5 py-1.5 text-xs font-semibold text-brown focus:outline-none focus:border-terra cursor-pointer"
+                                  >
+                                    <option value="Todos">Todos los Años</option>
+                                    {yearsList.map(y => (
+                                      <option key={y} value={y}>{y}</option>
+                                    ))}
+                                  </select>
                                 </div>
                               </div>
-                            )}
-
-                            {/* Edit Sale Button Mobile */}
-                            <button
-                              onClick={() => {
-                                setEditingSale({
-                                  ...order,
-                                  items: order.items ? order.items.map((it: any) => ({ ...it })) : [],
-                                  client: { ...order.client },
-                                  attachments: order.attachments ? [...order.attachments] : []
-                                });
-                              }}
-                              disabled={!canEditVentas}
-                              className="w-full py-2 bg-amber-500/10 border border-amber-500/40 hover:bg-amber-500 hover:text-white text-brown rounded-lg text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-1 transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed shadow-2xs"
-                            >
-                              <Pencil className="w-3.5 h-3.5 text-terra" />
-                              <span>Editar Venta / Precio / Costo</span>
-                            </button>
-
-                            {/* States selects */}
-                            <div className="grid grid-cols-2 gap-2 text-xs">
-                              <div className="flex flex-col gap-1">
-                                <label className="text-[9px] uppercase font-bold text-stone">Entrega</label>
-                                <select 
-                                  value={order.status} 
-                                  onChange={e => updateOrderStatus(order.id, 'status', e.target.value)}
-                                  className="text-xs py-1 px-2 border rounded font-semibold focus:outline-none"
-                                >
-                                  <option value="Pendiente">Pendiente</option>
-                                  <option value="En Producción">En Producción</option>
-                                  <option value="Listo para Entrega">Listo para Entrega</option>
-                                  <option value="Entregado">Entregado</option>
-                                </select>
-                              </div>
-
-                              <div className="flex flex-col gap-1">
-                                <label className="text-[9px] uppercase font-bold text-stone">Pago</label>
-                                <select 
-                                  value={order.paymentStatus} 
-                                  onChange={e => updateOrderStatus(order.id, 'paymentStatus', e.target.value)}
-                                  className="text-xs py-1 px-2 border rounded font-semibold focus:outline-none"
-                                >
-                                  <option value="Pendiente">Pendiente</option>
-                                  <option value="Señado">Señado</option>
-                                  <option value="Pagado">Pagado</option>
-                                </select>
-                              </div>
-                            </div>
-
-                            {/* Actions Buttons */}
-                            <div className="grid grid-cols-2 gap-2 mt-1">
-                              <button
-                                onClick={() => {
-                                  setRemitoCliente({
-                                    nombre: order.client.nombre || '',
-                                    telefono: order.client.telefono || '',
-                                    cuit: order.client.cuit || '',
-                                    direccion: order.client.direccion || '',
-                                    cp: order.client.cp || '',
-                                    ciudad: order.client.ciudad || '',
-                                    provincia: order.client.provincia || ''
-                                  });
-                                  setRemitoNumero(order.orderNum ? order.orderNum.replace('PE-', '') : '');
-                                  setRemitoFecha(new Date().toISOString().split('T')[0]);
-                                  setRemitoDeliveryDate(order.deliveryDate || new Date().toISOString().split('T')[0]);
-                                  setRemitoItems(order.items.map((it: any) => ({
-                                    id: Date.now() + Math.random(),
-                                    name: it.name,
-                                    detail: it.detail,
-                                    unitPrice: it.unitPrice,
-                                    qty: it.qty,
-                                    category: it.category
-                                  })));
-                                  setActiveTab('ventas');
-                                  setVentasSubTab('remitos');
-                                }}
-                                className="py-2 border border-stone/40 hover:bg-stone/5 text-stone rounded-lg text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-1 transition-all duration-150"
-                              >
-                                <FileText className="w-3.5 h-3.5" /> Remito
-                              </button>
 
                               <button
-                                onClick={() => handleSendToTaller(order)}
-                                className="py-2 border border-terra hover:bg-terra hover:text-white text-terra rounded-lg text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-1 transition-all duration-150"
+                                type="button"
+                                onClick={() => setShowSalesFilterMenu(false)}
+                                className="w-full mt-1 py-2 bg-brown text-cream hover:bg-terra hover:text-white rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer text-center"
                               >
-                                <Wrench className="w-3.5 h-3.5" /> Taller
+                                Aplicar Filtros
                               </button>
                             </div>
-
-                            <button 
-                              onClick={() => deleteOrder(order.id)}
-                              className="w-full py-2 border border-rose-200 text-stone hover:text-error hover:bg-rose-50 rounded-lg text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-1 transition-all duration-150"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" /> Eliminar Pedido
-                            </button>
-                          </div>
+                          </>
                         )}
                       </div>
-                    );
-                  })}
-                </div>
 
-                {/* FOOTER METRICS SUMMARY */}
-                <div className="bg-light-cream/40 px-5 py-3 border-t border-sand flex flex-col sm:flex-row justify-between items-center gap-2 text-xs text-stone font-medium">
-                  <div>
-                    Mostrando <strong className="text-brown">{filteredSales.length}</strong> de <strong className="text-brown">{sales.length}</strong> ventas.
+                      {/* EXPORTAR BOTON */}
+                      <button
+                        type="button"
+                        onClick={() => exportSalesOrdersToCSV(filteredSales)}
+                        className="px-3 py-2 border border-sand hover:border-terra text-brown hover:text-terra bg-white hover:bg-cream/40 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                        title="Exportar listado a formato CSV"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Exportar</span>
+                      </button>
+
+                      {/* BUSCADOR */}
+                      <div className="relative min-w-[190px] sm:min-w-[240px]">
+                        <Search className="w-3.5 h-3.5 text-stone absolute left-3 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          placeholder="Buscar por cliente, pedido..."
+                          value={salesSearch}
+                          onChange={e => setSalesSearch(e.target.value)}
+                          className="w-full text-xs py-2 pl-8.5 pr-8 border border-sand rounded-xl bg-white text-brown focus:outline-none focus:border-terra focus:ring-1 focus:ring-terra font-sans"
+                        />
+                        {salesSearch && (
+                          <button
+                            type="button"
+                            onClick={() => setSalesSearch('')}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-stone hover:text-brown p-0.5 cursor-pointer"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
                   </div>
 
-                  <div className="flex items-center gap-2">
-                    <span>Suma Total Seleccionada:</span>
-                    <strong className="text-brown font-serif text-sm">
-                      {fmt(filteredSales.reduce((acc, s) => acc + (s.total || 0), 0))}
-                    </strong>
+                  {filteredSales.length === 0 ? (
+                    <div className="p-12 text-center text-stone italic font-serif">
+                      No se encontraron órdenes de pedido que coincidan con la búsqueda o filtros aplicados.
+                    </div>
+                  ) : (
+                    <>
+                      {/* DESKTOP TABLE VIEW */}
+                      <div className="hidden md:block overflow-x-auto overflow-y-visible">
+                        <table className="w-full text-left border-collapse text-xs">
+                          <thead>
+                            <tr className="bg-light-cream/60 text-stone text-[11px] font-bold uppercase tracking-wider border-b border-sand">
+                              <th className="py-3 px-4">Cliente / Ref.</th>
+                              <th className="py-3 px-4">Fecha Pedido</th>
+                              <th className="py-3 px-4">Fecha Entrega</th>
+                              <th className="py-3 px-4">Categorías</th>
+                              <th className="py-3 px-4 text-right">Total</th>
+                              <th className="py-3 px-4 text-right">Saldo Restante</th>
+                              <th className="py-3 px-4 text-center">Estados</th>
+                              <th className="py-3 px-4 text-center w-12">Acciones</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-sand/40">
+                            {filteredSales.map(order => {
+                              const orderCategories = Array.from(new Set(order.items?.map((it: any) => it.category || it.cat || 'Otros') || [])).join(', ');
+                              const remainingBalance = Math.max(0, (order.total || 0) - (order.senaAmount || 0));
+                              const isMenuOpen = activeSaleRowMenuId === order.id;
+
+                              return (
+                                <tr
+                                  key={order.id}
+                                  onClick={() => setSelectedSaleDetail(order)}
+                                  className="hover:bg-cream/35 transition-colors cursor-pointer group"
+                                >
+                                  {/* CLIENTE / REF */}
+                                  <td className="py-3.5 px-4">
+                                    <div className="font-serif text-xs font-bold text-brown flex items-center gap-1.5">
+                                      <span>{order.client?.nombre || 'Consumidor Final'}</span>
+                                      {order.attachments && order.attachments.length > 0 && (
+                                        <span
+                                          className="inline-flex items-center gap-1 bg-amber-100 text-brown border border-sand px-1.5 py-0.5 rounded-full text-[9px] font-extrabold shadow-2xs"
+                                          title={`${order.attachments.length} archivo(s) / plano(s) adjunto(s)`}
+                                        >
+                                          <Paperclip className="w-2.5 h-2.5 text-terra" />
+                                          <span>{order.attachments.length}</span>
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="flex items-center gap-2 mt-0.5">
+                                      <span className="font-mono text-[9px] text-terra font-bold">{order.orderNum}</span>
+                                      {order.client?.telefono && (
+                                        <span className="text-[10px] text-stone truncate max-w-[130px]">{order.client.telefono}</span>
+                                      )}
+                                    </div>
+                                  </td>
+
+                                  {/* FECHA PEDIDO */}
+                                  <td className="py-3.5 px-4 text-xs text-stone font-mono whitespace-nowrap">
+                                    {fmtDate(order.date)}
+                                  </td>
+
+                                  {/* FECHA ENTREGA */}
+                                  <td className="py-3.5 px-4 text-xs text-stone font-semibold whitespace-nowrap">
+                                    {order.deliveryDate || '—'}
+                                  </td>
+
+                                  {/* CATEGORIAS */}
+                                  <td className="py-3.5 px-4 text-xs text-stone">
+                                    <span className="px-2 py-0.5 bg-sand/30 rounded-md text-[10px] font-bold text-brown inline-block max-w-[160px] truncate">
+                                      {orderCategories || 'Varios'}
+                                    </span>
+                                  </td>
+
+                                  {/* TOTAL */}
+                                  <td className="py-3.5 px-4 text-right text-xs font-bold text-brown font-mono whitespace-nowrap">
+                                    {fmt(order.total)}
+                                  </td>
+
+                                  {/* SALDO RESTANTE */}
+                                  <td className="py-3.5 px-4 text-right text-xs font-bold font-mono whitespace-nowrap">
+                                    {remainingBalance <= 0 ? (
+                                      <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200 text-[10px] font-bold">
+                                        Pagado
+                                      </span>
+                                    ) : (
+                                      <span className="text-terra">
+                                        {fmt(remainingBalance)}
+                                      </span>
+                                    )}
+                                  </td>
+
+                                  {/* ESTADOS */}
+                                  <td className="py-3.5 px-4">
+                                    <div className="flex flex-col gap-1 items-center">
+                                      <span className={`inline-block text-[9px] px-2 py-0.5 rounded-md border font-bold uppercase tracking-wider ${
+                                        order.status === 'Entregado' ? 'bg-blue-600/10 text-blue-700 border-blue-600/30' :
+                                        order.status === 'Listo para Entrega' ? 'bg-emerald-600/10 text-emerald-700 border-emerald-600/30' :
+                                        order.status === 'En Producción' ? 'bg-amber-500/10 text-amber-700 border-amber-500/30' :
+                                        'bg-rose-600/10 text-rose-700 border-rose-600/30'
+                                      }`}>
+                                        {order.status}
+                                      </span>
+                                      <span className={`inline-block text-[9px] px-2 py-0.5 rounded-md border font-bold uppercase tracking-wider ${
+                                        order.paymentStatus === 'Pagado' ? 'bg-emerald-600/10 text-emerald-700 border-emerald-600/30' :
+                                        order.paymentStatus === 'Señado' ? 'bg-amber-500/10 text-amber-700 border-amber-500/30' :
+                                        'bg-stone/10 text-stone border-stone/30'
+                                      }`}>
+                                        {order.paymentStatus}
+                                      </span>
+                                    </div>
+                                  </td>
+
+                                  {/* 3 PUNTITOS ACCIONES */}
+                                  <td className="py-3.5 px-4 text-center relative" onClick={e => e.stopPropagation()}>
+                                    <div className="relative inline-block text-left">
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setActiveSaleRowMenuId(isMenuOpen ? null : order.id);
+                                        }}
+                                        className="p-1.5 text-stone hover:text-brown hover:bg-sand/50 rounded-lg transition-colors cursor-pointer"
+                                        title="Opciones del pedido"
+                                      >
+                                        <MoreVertical className="w-4 h-4" />
+                                      </button>
+
+                                      {isMenuOpen && (
+                                        <>
+                                          <div
+                                            className="fixed inset-0 z-20"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setActiveSaleRowMenuId(null);
+                                            }}
+                                          />
+                                          <div className="absolute right-0 mt-1 w-52 bg-white border border-sand rounded-xl shadow-xl z-30 py-1.5 text-xs text-brown divide-y divide-sand/40 animate-fadeIn font-sans text-left">
+                                            <div className="px-3 py-1.5 text-[10px] font-bold text-stone uppercase tracking-wider bg-light-cream/40">
+                                              {order.orderNum}
+                                            </div>
+                                            <div className="py-1">
+                                              <button
+                                                type="button"
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  setActiveSaleRowMenuId(null);
+                                                  setSelectedSaleDetail(order);
+                                                }}
+                                                className="w-full text-left px-3.5 py-2 hover:bg-cream/40 flex items-center gap-2 text-brown font-semibold transition-colors cursor-pointer"
+                                              >
+                                                <Eye className="w-4 h-4 text-terra" />
+                                                <span>Ver Ficha Completa</span>
+                                              </button>
+
+                                              <button
+                                                type="button"
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  setActiveSaleRowMenuId(null);
+                                                  setEditingSale({
+                                                    ...order,
+                                                    items: order.items ? order.items.map((it: any) => ({ ...it })) : [],
+                                                    client: { ...order.client },
+                                                    attachments: order.attachments ? [...order.attachments] : []
+                                                  });
+                                                }}
+                                                disabled={!canEditVentas}
+                                                className="w-full text-left px-3.5 py-2 hover:bg-cream/40 flex items-center gap-2 text-brown font-semibold transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                                              >
+                                                <Pencil className="w-4 h-4 text-amber-700" />
+                                                <span>Editar Venta & Productos</span>
+                                              </button>
+                                            </div>
+
+                                            <div className="py-1">
+                                              <button
+                                                type="button"
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  setActiveSaleRowMenuId(null);
+                                                  setRemitoCliente({
+                                                    nombre: order.client?.nombre || '',
+                                                    telefono: order.client?.telefono || '',
+                                                    cuit: order.client?.cuit || '',
+                                                    direccion: order.client?.direccion || '',
+                                                    cp: order.client?.cp || '',
+                                                    ciudad: order.client?.ciudad || '',
+                                                    provincia: order.client?.provincia || ''
+                                                  });
+                                                  setRemitoNumero(order.orderNum ? order.orderNum.replace('PE-', '') : '');
+                                                  setRemitoFecha(new Date().toISOString().split('T')[0]);
+                                                  setRemitoDeliveryDate(order.deliveryDate || new Date().toISOString().split('T')[0]);
+                                                  setRemitoItems((order.items || []).map((it: any) => ({
+                                                    id: Date.now() + Math.random(),
+                                                    name: it.name || it.nombre,
+                                                    detail: it.detail || it.medidas || '',
+                                                    unitPrice: it.unitPrice || it.precioUnitario || 0,
+                                                    qty: it.qty || it.cant || 1,
+                                                    category: it.category || it.cat || 'Otros'
+                                                  })));
+                                                  setActiveTab('ventas');
+                                                  setVentasSubTab('remitos');
+                                                }}
+                                                className="w-full text-left px-3.5 py-2 hover:bg-cream/40 flex items-center gap-2 text-brown font-semibold transition-colors cursor-pointer"
+                                              >
+                                                <FileText className="w-4 h-4 text-blue-700" />
+                                                <span>Emitir Remito</span>
+                                              </button>
+
+                                              <button
+                                                type="button"
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  setActiveSaleRowMenuId(null);
+                                                  handleSendToTaller(order);
+                                                }}
+                                                className="w-full text-left px-3.5 py-2 hover:bg-cream/40 flex items-center gap-2 text-brown font-semibold transition-colors cursor-pointer"
+                                              >
+                                                <Wrench className="w-4 h-4 text-terra" />
+                                                <span>Enviar a Taller</span>
+                                              </button>
+
+                                              {remainingBalance > 0 && (
+                                                <button
+                                                  type="button"
+                                                  onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setActiveSaleRowMenuId(null);
+                                                    const remaining = (order.total || 0) - (order.senaAmount || 0);
+                                                    setPaymentRegisterForm({
+                                                      orderId: order.id,
+                                                      amount: String(remaining),
+                                                      account: order.paymentMethod?.toLowerCase().includes('cuotas') ? 'Uala' : order.paymentMethod?.toLowerCase().includes('transferencia') ? 'Santander' : 'Efectivo',
+                                                      currency: 'ARS',
+                                                      iva: '0',
+                                                      pendingPayment: false,
+                                                      date: new Date().toISOString().split('T')[0],
+                                                      note: `Cobro saldo pedido ${order.orderNum}`
+                                                    });
+                                                    setActiveTab('finanzas');
+                                                    setTesoreriaSubTab('ingresos');
+                                                  }}
+                                                  disabled={!canEditVentas}
+                                                  className="w-full text-left px-3.5 py-2 hover:bg-cream/40 flex items-center gap-2 text-emerald-700 font-semibold transition-colors cursor-pointer disabled:opacity-40"
+                                                >
+                                                  <DollarSign className="w-4 h-4 text-emerald-600" />
+                                                  <span>Registrar Cobro Saldo</span>
+                                                </button>
+                                              )}
+                                            </div>
+
+                                            <div className="py-1">
+                                              <button
+                                                type="button"
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  setActiveSaleRowMenuId(null);
+                                                  deleteOrder(order.id);
+                                                }}
+                                                disabled={!canEditVentas}
+                                                className="w-full text-left px-3.5 py-2 hover:bg-rose-50 flex items-center gap-2 text-error font-semibold transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                                              >
+                                                <Trash2 className="w-4 h-4 text-error" />
+                                                <span>Eliminar Pedido</span>
+                                              </button>
+                                            </div>
+                                          </div>
+                                        </>
+                                      )}
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* MOBILE CARD VIEW */}
+                      <div className="block md:hidden divide-y divide-sand/40">
+                        {filteredSales.map(order => {
+                          const orderCategories = Array.from(new Set(order.items?.map((it: any) => it.category || it.cat || 'Otros') || [])).join(', ');
+                          const remainingBalance = Math.max(0, (order.total || 0) - (order.senaAmount || 0));
+                          const isMenuOpen = activeSaleRowMenuId === order.id;
+
+                          return (
+                            <div key={order.id} className="p-4 flex flex-col gap-2.5 bg-white hover:bg-cream/20 transition-colors">
+                              <div
+                                className="flex justify-between items-start gap-2 cursor-pointer"
+                                onClick={() => setSelectedSaleDetail(order)}
+                              >
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="text-[10px] font-mono text-terra font-bold">{order.orderNum}</span>
+                                    {order.attachments && order.attachments.length > 0 && (
+                                      <span className="inline-flex items-center gap-1 bg-amber-100 text-brown border border-sand px-1.5 py-0.5 rounded-full text-[9px] font-extrabold">
+                                        <Paperclip className="w-2.5 h-2.5 text-terra" />
+                                        <span>{order.attachments.length}</span>
+                                      </span>
+                                    )}
+                                  </div>
+                                  <h4 className="font-serif text-sm font-bold text-brown truncate mt-0.5">{order.client?.nombre || 'Consumidor Final'}</h4>
+                                  <div className="flex flex-wrap gap-2 text-[10px] text-stone mt-1">
+                                    <span>Pedido: {fmtDate(order.date)}</span>
+                                    <span>•</span>
+                                    <span className="font-semibold text-terra">Entrega: {order.deliveryDate || '—'}</span>
+                                  </div>
+                                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                                    <span className="px-1.5 py-0.5 bg-sand/30 rounded text-[9px] font-bold text-brown">
+                                      {orderCategories || 'Varios'}
+                                    </span>
+                                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${
+                                      order.status === 'Entregado' ? 'bg-blue-50 text-blue-700' :
+                                      order.status === 'Listo para Entrega' ? 'bg-emerald-50 text-emerald-700' :
+                                      order.status === 'En Producción' ? 'bg-amber-50 text-amber-700' : 'bg-rose-50 text-rose-700'
+                                    }`}>
+                                      {order.status}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                <div className="flex flex-col items-end gap-1.5 shrink-0">
+                                  <div className="font-mono text-xs font-bold text-brown">{fmt(order.total)}</div>
+                                  <div className="text-[10px] text-stone">
+                                    Saldo: <span className="font-bold text-terra font-mono">{fmt(remainingBalance)}</span>
+                                  </div>
+
+                                  <div className="relative inline-block text-left mt-1" onClick={e => e.stopPropagation()}>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setActiveSaleRowMenuId(isMenuOpen ? null : order.id);
+                                      }}
+                                      className="p-1.5 text-stone hover:text-brown bg-light-cream border border-sand rounded-lg transition-colors cursor-pointer"
+                                    >
+                                      <MoreVertical className="w-4 h-4" />
+                                    </button>
+
+                                    {isMenuOpen && (
+                                      <>
+                                        <div
+                                          className="fixed inset-0 z-20"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setActiveSaleRowMenuId(null);
+                                          }}
+                                        />
+                                        <div className="absolute right-0 mt-1 w-48 bg-white border border-sand rounded-xl shadow-xl z-30 py-1.5 text-xs text-brown divide-y divide-sand/40 animate-fadeIn font-sans text-left">
+                                          <div className="py-1">
+                                            <button
+                                              type="button"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                setActiveSaleRowMenuId(null);
+                                                setSelectedSaleDetail(order);
+                                              }}
+                                              className="w-full text-left px-3.5 py-2 hover:bg-cream/40 flex items-center gap-2 text-brown font-semibold"
+                                            >
+                                              <Eye className="w-4 h-4 text-terra" />
+                                              <span>Ver Ficha</span>
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                setActiveSaleRowMenuId(null);
+                                                setEditingSale({
+                                                  ...order,
+                                                  items: order.items ? order.items.map((it: any) => ({ ...it })) : [],
+                                                  client: { ...order.client },
+                                                  attachments: order.attachments ? [...order.attachments] : []
+                                                });
+                                              }}
+                                              disabled={!canEditVentas}
+                                              className="w-full text-left px-3.5 py-2 hover:bg-cream/40 flex items-center gap-2 text-brown font-semibold disabled:opacity-40"
+                                            >
+                                              <Pencil className="w-4 h-4 text-amber-700" />
+                                              <span>Editar Venta</span>
+                                            </button>
+                                          </div>
+                                          <div className="py-1">
+                                            <button
+                                              type="button"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                setActiveSaleRowMenuId(null);
+                                                deleteOrder(order.id);
+                                              }}
+                                              disabled={!canEditVentas}
+                                              className="w-full text-left px-3.5 py-2 hover:bg-rose-50 flex items-center gap-2 text-error font-semibold disabled:opacity-40"
+                                            >
+                                              <Trash2 className="w-4 h-4 text-error" />
+                                              <span>Eliminar Pedido</span>
+                                            </button>
+                                          </div>
+                                        </div>
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
+
+                  {/* FOOTER METRICS SUMMARY */}
+                  <div className="bg-light-cream/40 px-5 py-3 border-t border-sand flex flex-col sm:flex-row justify-between items-center gap-2 text-xs text-stone font-medium">
+                    <div>
+                      Mostrando <strong className="text-brown">{filteredSales.length}</strong> de <strong className="text-brown">{sales.length}</strong> ventas registradas.
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span>Suma Total Seleccionada:</span>
+                      <strong className="text-brown font-serif text-sm">
+                        {fmt(filteredSales.reduce((acc, s) => acc + (s.total || 0), 0))}
+                      </strong>
+                    </div>
                   </div>
                 </div>
-            </div>
-          )}
-        </div>
-      )}
+              </div>
+            )}
 
             {/* SUBTAB 2: REMITOS (DELIVERY NOTES) */}
             {ventasSubTab === 'remitos' && currentUser.permissions.remitos.view && (
@@ -6475,7 +6727,7 @@ export default function App() {
 
                     <div className="flex items-center justify-between mt-2 pt-4 border-t border-sand">
                       <div className="flex flex-col gap-1.5">
-                        <label className="text-[10px] tracking-wider uppercase text-stone font-bold">Precio Unitario ($)</label>
+                        <label className="text-[10px] tracking-wider uppercase text-stone font-bold">Precio Unitario (AR$)</label>
                         <input 
                           type="text" 
                           placeholder="Ej. 150000" 
@@ -7289,7 +7541,7 @@ export default function App() {
                               <div className="col-span-2 flex flex-col gap-0.5">
                                 <span className="text-[9px] text-stone font-semibold">COSTO DE FABRICACIÓN unitario (Taller)</span>
                                 <div className="flex items-center gap-1 bg-white border border-sand rounded px-1.5 py-0.5">
-                                  <span className="text-stone text-[10px] font-bold font-mono">$</span>
+                                  <span className="text-stone text-[10px] font-bold font-mono">AR$</span>
                                   <input 
                                     type="number" 
                                     className="w-full text-right bg-transparent text-xs font-bold text-terra focus:outline-none p-0 border-none font-mono"
@@ -8144,7 +8396,7 @@ export default function App() {
                                     onChange={e => setPaymentRegisterForm({ ...paymentRegisterForm, currency: e.target.value })}
                                     className="text-xs bg-white border border-sand rounded-xl p-2.5 focus:outline-none focus:border-emerald-500 font-bold"
                                   >
-                                    <option value="ARS">ARS ($)</option>
+                                    <option value="ARS">ARS (AR$)</option>
                                     <option value="USD">USD (US$)</option>
                                   </select>
                                 </div>
@@ -8178,7 +8430,7 @@ export default function App() {
 
                               <div className="grid grid-cols-3 gap-3 bg-light-cream/30 p-3 rounded-xl border border-sand/60">
                                 <div className="flex flex-col gap-1">
-                                  <label className="text-[10px] font-bold uppercase tracking-wider text-stone">Monto Base ($)</label>
+                                  <label className="text-[10px] font-bold uppercase tracking-wider text-stone">Monto Base (AR$)</label>
                                   <input
                                     type="number"
                                     required
@@ -8204,7 +8456,7 @@ export default function App() {
                                 </div>
 
                                 <div className="flex flex-col gap-1">
-                                  <label className="text-[10px] font-bold uppercase tracking-wider text-stone">Total Calculado ($)</label>
+                                  <label className="text-[10px] font-bold uppercase tracking-wider text-stone">Total Calculado (AR$)</label>
                                   <input
                                     type="text"
                                     readOnly
@@ -8295,7 +8547,7 @@ export default function App() {
                                     onChange={e => setCustomIncomeForm({ ...customIncomeForm, currency: e.target.value })}
                                     className="text-xs bg-white border border-sand rounded-xl p-2.5 focus:outline-none focus:border-emerald-500 font-bold"
                                   >
-                                    <option value="ARS">ARS ($)</option>
+                                    <option value="ARS">ARS (AR$)</option>
                                     <option value="USD">USD (US$)</option>
                                   </select>
                                 </div>
@@ -8329,7 +8581,7 @@ export default function App() {
 
                               <div className="grid grid-cols-3 gap-3 bg-light-cream/30 p-3 rounded-xl border border-sand/60">
                                 <div className="flex flex-col gap-1">
-                                  <label className="text-[10px] font-bold uppercase tracking-wider text-stone">Monto Base ($)</label>
+                                  <label className="text-[10px] font-bold uppercase tracking-wider text-stone">Monto Base (AR$)</label>
                                   <input
                                     type="number"
                                     required
@@ -8355,7 +8607,7 @@ export default function App() {
                                 </div>
 
                                 <div className="flex flex-col gap-1">
-                                  <label className="text-[10px] font-bold uppercase tracking-wider text-stone">Total Calculado ($)</label>
+                                  <label className="text-[10px] font-bold uppercase tracking-wider text-stone">Total Calculado (AR$)</label>
                                   <input
                                     type="text"
                                     readOnly
@@ -8440,7 +8692,7 @@ export default function App() {
                                 baseMonto: outstanding,
                                 ivaPct: 0,
                                 estado: 'Pendiente',
-                                nota: `Total Venta: $${fmt(s.total)} | Señado: $${fmt(collected)} | Saldo: $${fmt(outstanding)}`,
+                                nota: `Total Venta: ${fmt(s.total)} | Señado: ${fmt(collected)} | Saldo: ${fmt(outstanding)}`,
                                 orderNum: s.orderNum,
                                 orderId: s.id,
                                 originalItem: s
@@ -8649,7 +8901,7 @@ export default function App() {
                                 onChange={e => setNewFixedCost({ ...newFixedCost, currency: e.target.value })}
                                 className="text-xs bg-white border border-sand rounded-xl p-2.5 focus:outline-none focus:border-rose-500 font-bold"
                               >
-                                <option value="ARS">ARS ($)</option>
+                                <option value="ARS">ARS (AR$)</option>
                                 <option value="USD">USD (US$)</option>
                               </select>
                             </div>
@@ -8683,7 +8935,7 @@ export default function App() {
 
                           <div className="grid grid-cols-3 gap-3 bg-light-cream/30 p-3 rounded-xl border border-sand/60">
                             <div className="flex flex-col gap-1">
-                              <label className="text-[10px] font-bold uppercase tracking-wider text-stone">Monto Base ($)</label>
+                              <label className="text-[10px] font-bold uppercase tracking-wider text-stone">Monto Base (AR$)</label>
                               <input
                                 type="number"
                                 required
@@ -8709,7 +8961,7 @@ export default function App() {
                             </div>
 
                             <div className="flex flex-col gap-1">
-                              <label className="text-[10px] font-bold uppercase tracking-wider text-stone">Total Calculado ($)</label>
+                              <label className="text-[10px] font-bold uppercase tracking-wider text-stone">Total Calculado (AR$)</label>
                               <input
                                 type="text"
                                 readOnly
@@ -9172,129 +9424,205 @@ export default function App() {
 
                 return (
                   <div className="space-y-5">
-                    {/* HEADER & FILTERS BAR */}
-                    <div className="bg-white border border-sand rounded-2xl p-4 sm:p-5 shadow-xs">
-                      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <FileText className="w-5 h-5 text-terra" />
-                            <h3 className="font-serif text-lg font-bold text-brown">
-                              Libro Diario de Movimientos & Asientos
-                            </h3>
-                          </div>
-                          <p className="text-xs text-stone mt-0.5">
-                            Registro contable centralizado de todos los cobros, ingresos directos y gastos/egresos.
-                          </p>
-                        </div>
-
-                        {/* SEARCH & TYPE FILTER PILLS */}
-                        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-                          {/* Buscador */}
-                          <div className="relative flex-1 min-w-[200px] sm:w-64">
-                            <Search className="w-4 h-4 text-stone absolute left-3 top-1/2 -translate-y-1/2" />
-                            <input
-                              type="text"
-                              placeholder="Buscar por ID, cliente, concepto..."
-                              value={movimientosSearch}
-                              onChange={(e) => setMovimientosSearch(e.target.value)}
-                              className="w-full pl-9 pr-8 py-2 bg-cream/30 border border-sand rounded-xl text-xs text-brown focus:ring-2 focus:ring-terra/30 focus:bg-white transition-all outline-none"
-                            />
-                            {movimientosSearch && (
-                              <button
-                                onClick={() => setMovimientosSearch('')}
-                                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-stone hover:text-brown cursor-pointer"
-                              >
-                                <X className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                          </div>
-
-                          {/* Filter Pills */}
-                          <div className="flex items-center bg-cream/50 p-1 rounded-xl border border-sand/60 text-xs font-bold">
-                            <button
-                              onClick={() => setMovimientosTypeFilter('todos')}
-                              className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
-                                movimientosTypeFilter === 'todos' ? 'bg-brown text-cream shadow-xs' : 'text-stone hover:text-brown'
-                              }`}
-                            >
-                              Todos ({allMovements.length})
-                            </button>
-                            <button
-                              onClick={() => setMovimientosTypeFilter('ingresos')}
-                              className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
-                                movimientosTypeFilter === 'ingresos' ? 'bg-emerald-700 text-white shadow-xs' : 'text-emerald-800 hover:bg-emerald-50'
-                              }`}
-                            >
-                              <Plus className="w-3 h-3" />
-                              Ingresos
-                            </button>
-                            <button
-                              onClick={() => setMovimientosTypeFilter('egresos')}
-                              className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
-                                movimientosTypeFilter === 'egresos' ? 'bg-rose-700 text-white shadow-xs' : 'text-rose-800 hover:bg-rose-50'
-                              }`}
-                            >
-                              <Trash2 className="w-3 h-3" />
-                              Egresos
-                            </button>
-                            <button
-                              onClick={() => setMovimientosTypeFilter('pendientes')}
-                              className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
-                                movimientosTypeFilter === 'pendientes' ? 'bg-amber-600 text-white shadow-xs' : 'text-amber-800 hover:bg-amber-50'
-                              }`}
-                            >
-                              Pendientes
-                            </button>
-                          </div>
-                        </div>
+                    {/* 1. SEPARATED TOP HEADER WITH CTA */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-1">
+                      <div>
+                        <h2 className="text-2xl font-bold text-brown tracking-tight">Movimientos</h2>
+                        <p className="text-xs text-stone mt-0.5 font-medium">Historial de ingresos y egresos.</p>
                       </div>
 
-                      {/* SUMMARY STATS STRIP */}
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 pt-4 border-t border-sand/60">
-                        <div className="bg-light-cream p-3 rounded-xl border border-sand/50">
-                          <span className="text-[10px] uppercase font-bold text-stone tracking-wider block">Asientos Filtrados</span>
-                          <span className="text-lg font-serif font-bold text-brown">{filteredMovements.length}</span>
-                        </div>
-                        <div className="bg-emerald-50/60 p-3 rounded-xl border border-emerald-200/60">
-                          <span className="text-[10px] uppercase font-bold text-emerald-800 tracking-wider block">Total Ingresos</span>
-                          <span className="text-lg font-serif font-bold text-emerald-700">+{fmt(totalMovIngresos)}</span>
-                        </div>
-                        <div className="bg-rose-50/60 p-3 rounded-xl border border-rose-200/60">
-                          <span className="text-[10px] uppercase font-bold text-rose-800 tracking-wider block">Total Egresos</span>
-                          <span className="text-lg font-serif font-bold text-rose-700">-{fmt(totalMovEgresos)}</span>
-                        </div>
-                        <div className={`p-3 rounded-xl border ${balanceMov >= 0 ? 'bg-sky-50/60 border-sky-200/60' : 'bg-amber-50/60 border-amber-200/60'}`}>
-                          <span className="text-[10px] uppercase font-bold text-stone tracking-wider block">Balance de Selección</span>
-                          <span className={`text-lg font-serif font-bold ${balanceMov >= 0 ? 'text-sky-800' : 'text-amber-800'}`}>
-                            {balanceMov >= 0 ? '+' : ''}{fmt(balanceMov)}
-                          </span>
-                        </div>
+                      {canEditFinanzas && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setNewMovementType('ingreso');
+                            setShowNewMovementModal(true);
+                          }}
+                          className="px-6 py-2.5 bg-[#0D9488] hover:bg-[#0F766E] text-white rounded-full text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg flex items-center justify-center gap-2 cursor-pointer shrink-0 active:scale-95"
+                          title="Cargar nuevo ingreso o egreso en el libro diario"
+                        >
+                          <Plus className="w-4 h-4 stroke-[3]" />
+                          <span>+ CARGAR MOVIMIENTO</span>
+                        </button>
+                      )}
+                    </div>
+
+                    {/* 2. SUMMARY METRIC CARDS (TAMAÑO ANTERIOR COMPLETO ARRIBA) */}
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+                      <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-sand/70 shadow-xs">
+                        <span className="text-[10px] uppercase font-bold text-stone tracking-wider block">Asientos Filtrados</span>
+                        <span className="text-xl sm:text-2xl font-serif font-bold text-brown mt-1 block">{filteredMovements.length}</span>
+                      </div>
+                      <div className="bg-emerald-50/70 p-3.5 sm:p-4 rounded-2xl border border-emerald-200/80 shadow-xs">
+                        <span className="text-[10px] uppercase font-bold text-emerald-800 tracking-wider block">Total Ingresos</span>
+                        <span className="text-xl sm:text-2xl font-serif font-bold text-emerald-700 mt-1 block">+{fmt(totalMovIngresos)}</span>
+                      </div>
+                      <div className="bg-rose-50/70 p-3.5 sm:p-4 rounded-2xl border border-rose-200/80 shadow-xs">
+                        <span className="text-[10px] uppercase font-bold text-rose-800 tracking-wider block">Total Egresos</span>
+                        <span className="text-xl sm:text-2xl font-serif font-bold text-rose-700 mt-1 block">-{fmt(totalMovEgresos)}</span>
+                      </div>
+                      <div className={`p-3.5 sm:p-4 rounded-2xl border shadow-xs ${balanceMov >= 0 ? 'bg-sky-50/70 border-sky-200/80' : 'bg-amber-50/70 border-amber-200/80'}`}>
+                        <span className="text-[10px] uppercase font-bold text-stone tracking-wider block">Balance de Selección</span>
+                        <span className={`text-xl sm:text-2xl font-serif font-bold mt-1 block ${balanceMov >= 0 ? 'text-sky-800' : 'text-amber-800'}`}>
+                          {balanceMov >= 0 ? '+' : ''}{fmt(balanceMov)}
+                        </span>
                       </div>
                     </div>
 
-                    {/* DATAGRID TABLE */}
-                    <div className="bg-white border border-sand rounded-2xl shadow-xs overflow-hidden">
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-left border-collapse min-w-[900px]">
+                    {/* 3. SEPARATED FILTER PILLS TABS */}
+                    <div className="flex items-center bg-white p-1 rounded-2xl border border-sand/70 shadow-xs w-fit">
+                      <button
+                        type="button"
+                        onClick={() => setMovimientosTypeFilter('todos')}
+                        className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                          movimientosTypeFilter === 'todos'
+                            ? 'bg-light-cream text-brown shadow-xs border border-sand/60'
+                            : 'text-stone hover:text-brown'
+                        }`}
+                      >
+                        <ArrowDownLeft className="w-3.5 h-3.5 text-terra" />
+                        <span>Movimientos</span>
+                        <span className="px-1.5 py-0.5 bg-emerald-50 text-emerald-700 rounded-full text-[10px] font-bold">
+                          {allMovements.length}
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setMovimientosTypeFilter('pendientes')}
+                        className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                          movimientosTypeFilter === 'pendientes'
+                            ? 'bg-light-cream text-brown shadow-xs border border-sand/60'
+                            : 'text-stone hover:text-brown'
+                        }`}
+                      >
+                        <Calendar className="w-3.5 h-3.5 text-amber-600" />
+                        <span>Futuros</span>
+                        <span className="px-1.5 py-0.5 bg-amber-50 text-amber-700 rounded-full text-[10px] font-bold">
+                          {allMovements.filter(m => m.estado === 'Pendiente').length}
+                        </span>
+                      </button>
+                    </div>
+
+                    {/* 4. MAIN TABLE CARD */}
+                    <div className="bg-white border border-sand rounded-2xl shadow-xs overflow-visible">
+                      {/* CARD TOP TOOLBAR: HISTORIAL, FILTRAR, EXPORTAR, BUSCAR */}
+                      <div className="p-4 sm:p-5 border-b border-sand/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <h3 className="font-bold text-brown text-base">Historial</h3>
+
+                        <div className="flex flex-wrap items-center gap-2">
+                          {/* Botón Filtrar */}
+                          <div className="relative">
+                            <button
+                              type="button"
+                              onClick={() => setShowMovimientosFilterMenu(!showMovimientosFilterMenu)}
+                              className={`px-3 py-1.5 border rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                                movimientosTypeFilter !== 'todos' || showMovimientosFilterMenu
+                                  ? 'bg-brown text-cream border-brown shadow-xs'
+                                  : 'border-sand text-stone hover:bg-cream/40'
+                              }`}
+                            >
+                              <Sliders className="w-3.5 h-3.5" />
+                              <span>Filtrar</span>
+                              {movimientosTypeFilter !== 'todos' && (
+                                <span className="w-2 h-2 rounded-full bg-terra ml-0.5"></span>
+                              )}
+                            </button>
+
+                            {showMovimientosFilterMenu && (
+                              <>
+                                <div className="fixed inset-0 z-20" onClick={() => setShowMovimientosFilterMenu(false)} />
+                                <div className="absolute right-0 mt-1.5 w-48 bg-white border border-sand rounded-xl shadow-lg z-30 py-1 text-xs">
+                                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase text-stone tracking-wider border-b border-sand/40">
+                                    Filtrar por tipo
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => { setMovimientosTypeFilter('todos'); setShowMovimientosFilterMenu(false); }}
+                                    className={`w-full px-3 py-2 text-left font-semibold hover:bg-cream/40 flex items-center justify-between ${movimientosTypeFilter === 'todos' ? 'text-terra font-bold' : 'text-brown'}`}
+                                  >
+                                    Todos los movimientos
+                                    {movimientosTypeFilter === 'todos' && <CheckCircle className="w-3.5 h-3.5 text-terra" />}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => { setMovimientosTypeFilter('ingresos'); setShowMovimientosFilterMenu(false); }}
+                                    className={`w-full px-3 py-2 text-left font-semibold hover:bg-cream/40 flex items-center justify-between ${movimientosTypeFilter === 'ingresos' ? 'text-emerald-700 font-bold' : 'text-brown'}`}
+                                  >
+                                    Solo Ingresos (+)
+                                    {movimientosTypeFilter === 'ingresos' && <CheckCircle className="w-3.5 h-3.5 text-emerald-700" />}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => { setMovimientosTypeFilter('egresos'); setShowMovimientosFilterMenu(false); }}
+                                    className={`w-full px-3 py-2 text-left font-semibold hover:bg-cream/40 flex items-center justify-between ${movimientosTypeFilter === 'egresos' ? 'text-rose-700 font-bold' : 'text-brown'}`}
+                                  >
+                                    Solo Egresos (-)
+                                    {movimientosTypeFilter === 'egresos' && <CheckCircle className="w-3.5 h-3.5 text-rose-700" />}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => { setMovimientosTypeFilter('pendientes'); setShowMovimientosFilterMenu(false); }}
+                                    className={`w-full px-3 py-2 text-left font-semibold hover:bg-cream/40 flex items-center justify-between ${movimientosTypeFilter === 'pendientes' ? 'text-amber-700 font-bold' : 'text-brown'}`}
+                                  >
+                                    Solo Pendientes
+                                    {movimientosTypeFilter === 'pendientes' && <CheckCircle className="w-3.5 h-3.5 text-amber-700" />}
+                                  </button>
+                                </div>
+                              </>
+                            )}
+                          </div>
+
+                          {/* Botón Exportar */}
+                          <button
+                            type="button"
+                            onClick={() => exportToCSV('payments', filteredPayments, filteredFixedCosts, totalVentas, totalCostoVariable, totalCostoFijo)}
+                            className="px-3 py-1.5 border border-sand text-stone hover:text-brown hover:bg-cream/40 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                            title="Exportar a CSV / Excel"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            <span>Exportar</span>
+                          </button>
+
+                          {/* Buscador */}
+                          <div className="relative w-44 sm:w-56">
+                            <Search className="w-3.5 h-3.5 text-stone absolute left-3 top-1/2 -translate-y-1/2" />
+                            <input
+                              type="text"
+                              placeholder="Buscar..."
+                              value={movimientosSearch}
+                              onChange={(e) => setMovimientosSearch(e.target.value)}
+                              className="w-full pl-8 pr-7 py-1.5 bg-cream/30 border border-sand rounded-xl text-xs text-brown focus:ring-2 focus:ring-terra/30 focus:bg-white transition-all outline-none"
+                            />
+                            {movimientosSearch && (
+                              <button
+                                type="button"
+                                onClick={() => setMovimientosSearch('')}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 text-stone hover:text-brown cursor-pointer"
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="overflow-x-auto overflow-y-visible">
+                        <table className="w-full text-left border-collapse min-w-[760px]">
                           <thead>
-                            <tr className="bg-brown text-cream text-[11px] font-bold uppercase tracking-wider border-b border-sand/30">
-                              <th className="py-3 px-3 w-10 text-center">Tipo</th>
-                              <th className="py-3 px-3">ID</th>
-                              <th className="py-3 px-3">Fecha</th>
-                              <th className="py-3 px-3">Cliente / Entidad</th>
-                              <th className="py-3 px-3">Operación / Concepto</th>
-                              <th className="py-3 px-3">Moneda</th>
-                              <th className="py-3 px-3">Medio de Pago / Cuenta</th>
-                              <th className="py-3 px-3">Sub-Categoría</th>
-                              <th className="py-3 px-3">Estado</th>
-                              <th className="py-3 px-3 text-right">Total ARS</th>
-                              <th className="py-3 px-3 text-center w-20">Acciones</th>
+                            <tr className="bg-light-cream/60 text-stone text-[11px] font-bold uppercase tracking-wider border-b border-sand">
+                              <th className="py-3 px-4 w-28">Fecha</th>
+                              <th className="py-3 px-4">Descripción</th>
+                              <th className="py-3 px-4">Categoría</th>
+                              <th className="py-3 px-4">Cuenta</th>
+                              <th className="py-3 px-4">Tipo</th>
+                              <th className="py-3 px-4 text-right">Monto</th>
+                              <th className="py-3 px-3 text-center w-12"></th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-sand/40 text-xs">
                             {filteredMovements.length === 0 ? (
                               <tr>
-                                <td colSpan={11} className="py-12 text-center text-stone">
+                                <td colSpan={7} className="py-12 text-center text-stone">
                                   <FileText className="w-8 h-8 text-stone/40 mx-auto mb-2" />
                                   <p className="font-bold">No se encontraron asientos contables</p>
                                   <p className="text-[11px] text-stone/80 mt-1">Probá cambiando el texto de búsqueda o los filtros superiores.</p>
@@ -9303,90 +9631,188 @@ export default function App() {
                             ) : (
                               filteredMovements.map((m) => {
                                 const isIngreso = m.rawType === 'ingreso';
+                                const mKey = `${m.codigo}-${m.originalId}`;
+                                const isMenuOpen = activeMovementMenuId === mKey;
+                                
+                                // Date formatting
+                                let dateDayMonth = '—';
+                                let dateYear = '';
+                                if (m.fecha && m.fecha !== '—') {
+                                  try {
+                                    const d = new Date(m.fecha.includes('T') ? m.fecha : `${m.fecha}T12:00:00`);
+                                    if (!isNaN(d.getTime())) {
+                                      const monthNames = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+                                      dateDayMonth = `${d.getDate()} ${monthNames[d.getMonth()]}`;
+                                      dateYear = `${d.getFullYear()}`;
+                                    } else {
+                                      dateDayMonth = m.fecha;
+                                    }
+                                  } catch (e) {
+                                    dateDayMonth = m.fecha;
+                                  }
+                                }
+
+                                // Type pill formatting
+                                const isPending = m.estado === 'Pendiente';
+                                const isTransfer = (m.subCategoria && m.subCategoria.toLowerCase().includes('transferencia')) ||
+                                                  (m.operacion && m.operacion.toLowerCase().includes('transferencia'));
+
+                                let typeLabel = isIngreso ? 'Ingreso' : 'Egreso';
+                                let typeClass = isIngreso ? 'bg-emerald-100/70 text-emerald-800 border border-emerald-200/60' : 'bg-rose-100/70 text-rose-800 border border-rose-200/60';
+
+                                if (isTransfer) {
+                                  typeLabel = isIngreso ? 'Transferencia Entrante' : 'Transferencia Saliente';
+                                  typeClass = 'bg-purple-100/70 text-purple-700 border border-purple-200/60';
+                                } else if (isPending) {
+                                  typeLabel = 'Pendiente';
+                                  typeClass = 'bg-amber-100/80 text-amber-800 border border-amber-300/80';
+                                } else if (isIngreso) {
+                                  if (m.subCategoria === 'Saldo' || m.operacion?.includes('Saldo')) typeLabel = 'Cobro Saldo';
+                                  else if (m.subCategoria === 'Seña' || m.operacion?.includes('Seña')) typeLabel = 'Seña Anticipo';
+                                }
+
                                 return (
                                   <tr
-                                    key={`${m.codigo}-${m.originalId}`}
+                                    key={mKey}
                                     onClick={() => setSelectedTransactionDetail(m)}
                                     className="hover:bg-cream/40 transition-colors group cursor-pointer"
                                     title="Clic para ver detalle de la transacción"
                                   >
-                                    <td className="py-3 px-3 text-center">
-                                      <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${
-                                        isIngreso ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
-                                      }`}>
-                                        {isIngreso ? '+' : '-'}
+                                    {/* 1. FECHA */}
+                                    <td className="py-3.5 px-4 whitespace-nowrap align-middle">
+                                      <div className="font-bold text-brown text-xs">{dateDayMonth}</div>
+                                      {dateYear && <div className="text-[11px] text-stone font-normal">{dateYear}</div>}
+                                    </td>
+
+                                    {/* 2. DESCRIPCIÓN */}
+                                    <td className="py-3.5 px-4 align-middle">
+                                      <div className="flex items-center gap-3">
+                                        <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold shrink-0 ${
+                                          isIngreso ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                                        }`}>
+                                          {isIngreso ? '+' : '-'}
+                                        </span>
+                                        <div className="min-w-0 max-w-[280px]">
+                                          <div className="font-bold text-brown text-xs truncate" title={m.operacion || m.descripcion}>
+                                            {m.operacion || m.descripcion || m.entidad}
+                                          </div>
+                                          <div className="flex items-center gap-1.5 mt-0.5">
+                                            {m.entidad && (
+                                              <span className="px-1.5 py-0.5 text-[10px] font-medium bg-sand/30 text-stone rounded truncate max-w-[150px]">
+                                                {m.entidad}
+                                              </span>
+                                            )}
+                                            {m.codigo && (
+                                              <span className="text-[10px] font-mono text-stone/70">
+                                                #{m.codigo}
+                                              </span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </td>
+
+                                    {/* 3. CATEGORÍA */}
+                                    <td className="py-3.5 px-4 whitespace-nowrap align-middle">
+                                      <span className="px-2.5 py-1 bg-light-cream border border-sand/60 text-stone rounded-lg font-medium text-[11px] inline-block max-w-[160px] truncate" title={m.subCategoria || m.categoria}>
+                                        {m.subCategoria || m.categoria || 'General'}
                                       </span>
                                     </td>
-                                    <td className="py-3 px-3 font-mono font-bold text-brown whitespace-nowrap group-hover:text-terra transition-colors">
-                                      {m.codigo}
+
+                                    {/* 4. CUENTA */}
+                                    <td className="py-3.5 px-4 whitespace-nowrap align-middle text-brown font-medium text-xs">
+                                      {m.medio || m.cuenta || 'Efectivo'}
                                     </td>
-                                    <td className="py-3 px-3 text-stone whitespace-nowrap">
-                                      {fmtDate(m.fecha)}
-                                    </td>
-                                    <td className="py-3 px-3 font-semibold text-brown max-w-[180px] truncate">
-                                      {m.entidad}
-                                    </td>
-                                    <td className="py-3 px-3 text-stone max-w-[220px] truncate" title={m.operacion}>
-                                      {m.operacion}
-                                    </td>
-                                    <td className="py-3 px-3 font-mono font-semibold text-stone">
-                                      {m.moneda}
-                                    </td>
-                                    <td className="py-3 px-3">
-                                      <span className="inline-block px-2 py-0.5 bg-sand/30 text-brown rounded-md font-medium text-[11px]">
-                                        {m.medio}
+
+                                    {/* 5. TIPO */}
+                                    <td className="py-3.5 px-4 whitespace-nowrap align-middle">
+                                      <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold inline-block ${typeClass}`}>
+                                        {typeLabel}
                                       </span>
                                     </td>
-                                    <td className="py-3 px-3 text-stone">
-                                      {m.subCategoria}
-                                    </td>
-                                    <td className="py-3 px-3 whitespace-nowrap">
-                                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                        m.estado === 'Pendiente'
-                                          ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                                          : isIngreso
-                                          ? 'bg-emerald-100 text-emerald-800'
-                                          : 'bg-stone-100 text-stone-700'
-                                      }`}>
-                                        {m.estado}
-                                      </span>
-                                    </td>
-                                    <td className={`py-3 px-3 text-right font-mono font-bold text-sm whitespace-nowrap ${
+
+                                    {/* 6. MONTO */}
+                                    <td className={`py-3.5 px-4 text-right font-mono font-bold text-sm whitespace-nowrap align-middle ${
                                       isIngreso ? 'text-emerald-700' : 'text-rose-700'
                                     }`}>
-                                      {isIngreso ? '+' : '-'}${fmt(m.monto)}
+                                      {isIngreso ? '+' : '-'}{fmt(m.monto)}
                                     </td>
-                                    <td className="py-3 px-3 text-center whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                                      <div className="flex items-center justify-center gap-1 opacity-80 group-hover:opacity-100">
+
+                                    {/* 7. ACCIONES (3 PUNTITOS) */}
+                                    <td className="py-3.5 px-3 text-center whitespace-nowrap align-middle relative" onClick={(e) => e.stopPropagation()}>
+                                      <div className="relative inline-block text-left">
                                         <button
                                           type="button"
-                                          onClick={() => setSelectedTransactionDetail(m)}
-                                          title="Ver detalle completo"
-                                          className="p-1.5 text-stone hover:text-brown hover:bg-sand/30 rounded-lg transition-colors cursor-pointer"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setActiveMovementMenuId(isMenuOpen ? null : mKey);
+                                          }}
+                                          title="Opciones del movimiento"
+                                          className={`p-1.5 rounded-lg transition-all cursor-pointer ${
+                                            isMenuOpen
+                                              ? 'bg-brown text-cream shadow-xs'
+                                              : 'text-stone hover:text-brown hover:bg-sand/40'
+                                          }`}
                                         >
-                                          <Eye className="w-3.5 h-3.5" />
+                                          <MoreVertical className="w-4 h-4" />
                                         </button>
-                                        {canEditFinanzas ? (
+
+                                        {/* DROPDOWN MENU */}
+                                        {isMenuOpen && (
                                           <>
-                                            <button
-                                              type="button"
-                                              onClick={() => openEditMovement(m)}
-                                              title="Editar gasto / movimiento"
-                                              className="p-1.5 text-stone hover:text-terra hover:bg-terra/10 rounded-lg transition-colors cursor-pointer"
-                                            >
-                                              <Edit2 className="w-3.5 h-3.5" />
-                                            </button>
-                                            <button
-                                              type="button"
-                                              onClick={() => deleteMovementItem(m)}
-                                              title="Eliminar asiento"
-                                              className="p-1.5 text-stone hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                                            >
-                                              <Trash2 className="w-3.5 h-3.5" />
-                                            </button>
+                                            {/* Backdrop click to close */}
+                                            <div
+                                              className="fixed inset-0 z-30"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                setActiveMovementMenuId(null);
+                                              }}
+                                            />
+                                            <div className="absolute right-0 mt-1.5 w-44 bg-white border border-sand rounded-xl shadow-lg z-40 py-1 overflow-hidden animate-in fade-in zoom-in-95 duration-100">
+                                              <button
+                                                type="button"
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  setActiveMovementMenuId(null);
+                                                  setSelectedTransactionDetail(m);
+                                                }}
+                                                className="w-full px-3.5 py-2 text-left text-xs font-semibold text-brown hover:bg-cream/50 flex items-center gap-2.5 transition-colors cursor-pointer"
+                                              >
+                                                <Eye className="w-4 h-4 text-terra" />
+                                                Ver detalle
+                                              </button>
+
+                                              {canEditFinanzas && (
+                                                <>
+                                                  <button
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      setActiveMovementMenuId(null);
+                                                      openEditMovement(m);
+                                                    }}
+                                                    className="w-full px-3.5 py-2 text-left text-xs font-semibold text-brown hover:bg-cream/50 flex items-center gap-2.5 transition-colors cursor-pointer"
+                                                  >
+                                                    <Edit2 className="w-4 h-4 text-brown" />
+                                                    Editar movimiento
+                                                  </button>
+                                                  <div className="my-1 border-t border-sand/40" />
+                                                  <button
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      setActiveMovementMenuId(null);
+                                                      deleteMovementItem(m);
+                                                    }}
+                                                    className="w-full px-3.5 py-2 text-left text-xs font-semibold text-rose-600 hover:bg-rose-50 flex items-center gap-2.5 transition-colors cursor-pointer"
+                                                  >
+                                                    <Trash2 className="w-4 h-4 text-rose-600" />
+                                                    Eliminar
+                                                  </button>
+                                                </>
+                                              )}
+                                            </div>
                                           </>
-                                        ) : (
-                                          <span className="text-[10px] text-stone/50 italic">Lectura</span>
                                         )}
                                       </div>
                                     </td>
@@ -9446,6 +9872,16 @@ export default function App() {
                 onToggleStatus={(item) => {
                   toggleMovementStatus(item);
                 }}
+                onViewOrder={(orderIdOrNum) => {
+                  const found = sales.find(s => String(s.id) === String(orderIdOrNum) || String(s.orderNum) === String(orderIdOrNum));
+                  if (found) {
+                    setSelectedSaleDetail(found);
+                  } else {
+                    setActiveTab('ventas');
+                    setVentasSubTab('ventas');
+                    setSalesSearch(String(orderIdOrNum));
+                  }
+                }}
                 canEdit={canEditFinanzas}
               />
 
@@ -9454,43 +9890,336 @@ export default function App() {
         })()}
       </main>
 
+      {/* MODAL DE DETALLE INDIVIDUAL DE PEDIDO / VENTA */}
+      <SaleDetailModal
+        isOpen={selectedSaleDetail !== null}
+        onClose={() => setSelectedSaleDetail(null)}
+        sale={selectedSaleDetail}
+        fmt={fmt}
+        fmtDate={fmtDate}
+        canEdit={canEditVentas}
+        onEdit={(saleToEdit) => {
+          setSelectedSaleDetail(null);
+          setEditingSale({
+            ...saleToEdit,
+            items: saleToEdit.items ? saleToEdit.items.map((it: any) => ({ ...it })) : [],
+            client: { ...saleToEdit.client },
+            attachments: saleToEdit.attachments ? [...saleToEdit.attachments] : []
+          });
+        }}
+        onDelete={(saleId) => {
+          setSelectedSaleDetail(null);
+          deleteOrder(saleId);
+        }}
+        onUpdateStatus={(saleId, field, val) => {
+          updateOrderStatus(saleId, field, val);
+          if (selectedSaleDetail && String(selectedSaleDetail.id) === String(saleId)) {
+            setSelectedSaleDetail((prev: any) => prev ? { ...prev, [field]: val } : null);
+          }
+        }}
+        onGenerateRemito={(sale) => {
+          setSelectedSaleDetail(null);
+          setRemitoCliente({
+            nombre: sale.client?.nombre || '',
+            telefono: sale.client?.telefono || '',
+            cuit: sale.client?.cuit || '',
+            direccion: sale.client?.direccion || '',
+            cp: sale.client?.cp || '',
+            ciudad: sale.client?.ciudad || '',
+            provincia: sale.client?.provincia || ''
+          });
+          setRemitoNumero(sale.orderNum ? sale.orderNum.replace('PE-', '').replace('PED-', '') : '');
+          setRemitoFecha(new Date().toISOString().split('T')[0]);
+          setRemitoDeliveryDate(sale.deliveryDate || new Date().toISOString().split('T')[0]);
+          setRemitoItems((sale.items || []).map((it: any) => ({
+            id: Date.now() + Math.random(),
+            name: it.name,
+            detail: it.detail,
+            unitPrice: it.unitPrice,
+            qty: it.qty || it.quantity || 1,
+            category: it.category
+          })));
+          setActiveTab('ventas');
+          setVentasSubTab('remitos');
+        }}
+        onSendToTaller={(sale) => {
+          setSelectedSaleDetail(null);
+          handleSendToTaller(sale);
+        }}
+        onRegisterPayment={(sale) => {
+          setSelectedSaleDetail(null);
+          const remaining = sale.total - (sale.senaAmount || 0);
+          setPaymentRegisterForm({
+            orderId: sale.id,
+            amount: String(remaining),
+            account: sale.paymentMethod?.toLowerCase().includes('cuotas') ? 'Uala' : sale.paymentMethod?.toLowerCase().includes('transferencia') ? 'Santander' : 'Efectivo',
+            currency: 'ARS',
+            iva: '0',
+            pendingPayment: false,
+            date: new Date().toISOString().split('T')[0],
+            note: `Cobro saldo pedido ${sale.orderNum}`
+          });
+          setActiveTab('finanzas');
+          setTesoreriaSubTab('ingresos');
+        }}
+        onPreviewImage={(p) => setPreviewImage(p)}
+      />
+
       {/* EDIT SALE MODAL OVERLAY */}
       {editingSale && (
-        <div className="fixed inset-0 bg-brown/50 backdrop-blur-xs flex items-center justify-center z-30 p-4 animate-fadeIn">
-          <div className="bg-white border-2 border-sand rounded-2xl max-w-xl w-full p-6 shadow-2xl flex flex-col gap-5 max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-brown/50 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-fadeIn">
+          <div className="bg-white border border-sand rounded-2xl max-w-3xl w-full p-6 shadow-2xl flex flex-col gap-5 max-h-[92vh] overflow-y-auto font-sans">
             
+            {/* MODAL HEADER */}
             <div className="border-b border-sand pb-3 flex justify-between items-center">
               <div>
                 <h2 className="font-serif text-lg font-bold text-brown flex items-center gap-2">
                   <Pencil className="w-5 h-5 text-terra" />
-                  <span>Editar Venta</span>
-                  <span className="font-mono text-xs text-terra bg-amber-50 px-2 py-0.5 rounded-full border border-sand">
+                  <span>Editar Venta & Productos</span>
+                  <span className="font-mono text-xs text-terra bg-amber-50 px-2.5 py-0.5 rounded-full border border-sand font-bold">
                     {editingSale.orderNum}
                   </span>
                 </h2>
                 <p className="text-xs text-stone mt-0.5">
-                  Cliente: <strong>{editingSale.client?.nombre || 'Consumidor Final'}</strong>
+                  Modificá productos línea por línea, agregá nuevos ítems, ajustá costos, precios y datos del pedido.
                 </p>
               </div>
               <button 
                 onClick={() => setEditingSale(null)}
-                className="p-1 rounded-lg hover:bg-sand/40 text-stone hover:text-brown transition-colors"
+                className="p-1.5 rounded-xl hover:bg-sand/40 text-stone hover:text-brown transition-colors cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="flex flex-col gap-4">
-              
-              {/* Main Financial Inputs */}
-              <div className="bg-amber-50/20 border border-sand/80 rounded-xl p-4 flex flex-col gap-3">
-                <h4 className="text-[10px] uppercase font-bold text-stone tracking-wider border-b border-sand pb-1">
-                  Valores Financieros
+            <div className="flex flex-col gap-5">
+
+              {/* CLIENT & GENERAL DATA */}
+              <div className="bg-light-cream/30 border border-sand rounded-xl p-4 flex flex-col gap-3">
+                <h4 className="text-[10px] uppercase font-bold text-stone tracking-wider border-b border-sand pb-1 flex items-center gap-1.5">
+                  <UserIcon className="w-3.5 h-3.5 text-terra" /> Datos del Cliente & Contacto
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] font-bold uppercase text-stone">Nombre del Cliente</label>
+                    <input
+                      type="text"
+                      value={editingSale.client?.nombre || ''}
+                      onChange={(e) => setEditingSale({
+                        ...editingSale,
+                        client: { ...editingSale.client, nombre: e.target.value }
+                      })}
+                      placeholder="Nombre y Apellido"
+                      className="p-2 border border-sand rounded-lg text-xs bg-white text-brown font-semibold focus:ring-1 focus:ring-terra focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] font-bold uppercase text-stone">Teléfono / WhatsApp</label>
+                    <input
+                      type="text"
+                      value={editingSale.client?.telefono || ''}
+                      onChange={(e) => setEditingSale({
+                        ...editingSale,
+                        client: { ...editingSale.client, telefono: e.target.value }
+                      })}
+                      placeholder="ej. +54 9 11 1234-5678"
+                      className="p-2 border border-sand rounded-lg text-xs bg-white text-brown focus:ring-1 focus:ring-terra focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] font-bold uppercase text-stone">Dirección / Localidad</label>
+                    <input
+                      type="text"
+                      value={editingSale.client?.direccion || ''}
+                      onChange={(e) => setEditingSale({
+                        ...editingSale,
+                        client: { ...editingSale.client, direccion: e.target.value }
+                      })}
+                      placeholder="Calle, Número, Ciudad"
+                      className="p-2 border border-sand rounded-lg text-xs bg-white text-brown focus:ring-1 focus:ring-terra focus:outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* PRODUCTS LINE BY LINE (CRUD) */}
+              <div className="bg-white border border-sand rounded-xl p-4 flex flex-col gap-3">
+                <div className="flex items-center justify-between border-b border-sand pb-2">
+                  <div className="flex items-center gap-2">
+                    <ShoppingBag className="w-4 h-4 text-terra" />
+                    <h4 className="text-xs uppercase font-bold text-brown tracking-wider">
+                      Productos y Líneas de Pedido
+                    </h4>
+                    <span className="text-[10px] font-bold text-stone bg-light-cream px-2 py-0.5 rounded-full border border-sand">
+                      {editingSale.items?.length || 0} {editingSale.items?.length === 1 ? 'producto' : 'productos'}
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleAddItemToEditingSale}
+                    className="px-3 py-1.5 bg-terra text-white hover:bg-brown rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Agregar Producto</span>
+                  </button>
+                </div>
+
+                {(!editingSale.items || editingSale.items.length === 0) ? (
+                  <div className="p-6 text-center text-stone italic text-xs bg-light-cream/20 rounded-xl border border-dashed border-sand">
+                    No hay productos cargados en esta orden. Hacé clic en "+ Agregar Producto" para crear uno.
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-3 max-h-80 overflow-y-auto pr-1">
+                    {editingSale.items.map((item: any, idx: number) => {
+                      const itemQty = Number(item.qty ?? item.cant ?? 1) || 1;
+                      const itemPrice = Number(item.unitPrice ?? item.precioUnitario ?? 0) || 0;
+                      const itemCost = Number(item.cost ?? item.costoUnitario ?? item.costo ?? 0) || 0;
+                      const lineTotal = itemPrice * itemQty;
+                      const lineCost = itemCost * itemQty;
+                      const lineProfit = Math.max(0, lineTotal - lineCost);
+
+                      return (
+                        <div 
+                          key={item.id || idx} 
+                          className="bg-light-cream/30 border border-sand/70 rounded-xl p-3.5 flex flex-col gap-2.5 relative group hover:border-sand transition-all"
+                        >
+                          {/* Row Top: Cantidad, Nombre, Categoría, Delete */}
+                          <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center">
+                            {/* Cantidad */}
+                            <div className="sm:col-span-2 flex flex-col gap-0.5">
+                              <label className="text-[9px] uppercase font-bold text-stone">Cant.</label>
+                              <input
+                                type="number"
+                                min={1}
+                                value={itemQty}
+                                onChange={(e) => handleUpdateEditingSaleItem(idx, 'qty', e.target.value)}
+                                className="w-full p-1.5 border border-sand rounded-lg text-xs font-bold text-center bg-white text-brown focus:ring-1 focus:ring-terra focus:outline-none"
+                              />
+                            </div>
+
+                            {/* Nombre del Producto */}
+                            <div className="sm:col-span-6 flex flex-col gap-0.5">
+                              <label className="text-[9px] uppercase font-bold text-stone">Producto / Modelo</label>
+                              <input
+                                type="text"
+                                value={item.name || item.nombre || ''}
+                                onChange={(e) => handleUpdateEditingSaleItem(idx, 'name', e.target.value)}
+                                placeholder="ej. Mesa Paraíso Enchapada"
+                                className="w-full p-1.5 border border-sand rounded-lg text-xs font-bold bg-white text-brown focus:ring-1 focus:ring-terra focus:outline-none"
+                              />
+                            </div>
+
+                            {/* Categoría */}
+                            <div className="sm:col-span-3 flex flex-col gap-0.5">
+                              <label className="text-[9px] uppercase font-bold text-stone">Categoría</label>
+                              <select
+                                value={item.category || item.cat || 'Mesas'}
+                                onChange={(e) => handleUpdateEditingSaleItem(idx, 'category', e.target.value)}
+                                className="w-full p-1.5 border border-sand rounded-lg text-xs font-semibold bg-white text-brown focus:ring-1 focus:ring-terra focus:outline-none cursor-pointer"
+                              >
+                                <option value="Mesas">Mesas</option>
+                                <option value="Sillas">Sillas</option>
+                                <option value="Sillones">Sillones</option>
+                                <option value="Banquetas">Banquetas</option>
+                                <option value="Camas">Camas</option>
+                                <option value="Muebles TV">Muebles TV</option>
+                                <option value="Espejos">Espejos</option>
+                                <option value="Otros">Otros</option>
+                              </select>
+                            </div>
+
+                            {/* Delete Button */}
+                            <div className="sm:col-span-1 flex justify-end items-end pt-3 sm:pt-0">
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveEditingSaleItem(idx)}
+                                className="p-1.5 text-stone hover:text-error hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                                title="Eliminar este producto"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Row Middle: Medidas / Lustre / Detalle */}
+                          <div className="flex flex-col gap-0.5">
+                            <label className="text-[9px] uppercase font-bold text-stone">Detalle / Medidas / Lustre / Tapizado</label>
+                            <input
+                              type="text"
+                              value={item.detail || item.medidas || ''}
+                              onChange={(e) => handleUpdateEditingSaleItem(idx, 'detail', e.target.value)}
+                              placeholder="ej. 1.80 x 0.90 x 0.77m - Lustre Petiribí Natural - Base Negra"
+                              className="w-full p-1.5 border border-sand/70 rounded-lg text-xs bg-white text-stone focus:ring-1 focus:ring-terra focus:outline-none"
+                            />
+                          </div>
+
+                          {/* Row Bottom: Precios, Costos y Subtotal de Línea */}
+                          <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-sand/40 bg-white/60 -mx-3.5 -mb-3.5 p-2.5 rounded-b-xl">
+                            <div className="flex flex-wrap items-center gap-3">
+                              {/* Precio Unitario */}
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-[10px] uppercase font-bold text-stone">Precio U.:</span>
+                                <div className="relative">
+                                  <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-stone font-bold">$</span>
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    value={itemPrice}
+                                    onChange={(e) => handleUpdateEditingSaleItem(idx, 'unitPrice', e.target.value)}
+                                    className="w-24 pl-5 pr-2 py-1 border border-sand rounded-md text-xs font-mono font-bold text-brown bg-white text-right focus:ring-1 focus:ring-terra focus:outline-none"
+                                  />
+                                </div>
+                              </div>
+
+                              {/* Costo Unitario */}
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-[10px] uppercase font-bold text-stone">Costo U.:</span>
+                                <div className="relative">
+                                  <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-stone font-bold">$</span>
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    value={itemCost}
+                                    onChange={(e) => handleUpdateEditingSaleItem(idx, 'cost', e.target.value)}
+                                    className="w-24 pl-5 pr-2 py-1 border border-sand rounded-md text-xs font-mono font-bold text-amber-900 bg-white text-right focus:ring-1 focus:ring-terra focus:outline-none"
+                                  />
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Subtotales calculados */}
+                            <div className="flex items-center gap-3 text-xs font-mono font-bold">
+                              <div className="text-stone">
+                                Costo: <span className="text-amber-900">{fmt(lineCost)}</span>
+                              </div>
+                              <div className="text-brown">
+                                Subtotal: <span className="text-brown">{fmt(lineTotal)}</span>
+                              </div>
+                              <div className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px]">
+                                Ganancia: {fmt(lineProfit)}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* FINANCIAL TOTALS SUMMARY */}
+              <div className="bg-amber-50/25 border border-sand rounded-xl p-4 flex flex-col gap-3">
+                <h4 className="text-[10px] uppercase font-bold text-stone tracking-wider border-b border-sand pb-1 flex items-center justify-between">
+                  <span>Resumen Financiero Total de la Venta</span>
+                  <span className="text-[9px] font-normal text-stone">Calculado automáticamente de los productos o editable</span>
                 </h4>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div className="flex flex-col gap-1">
-                    <label className="text-[10px] font-bold uppercase text-brown">Precio Venta Total ($)</label>
+                    <label className="text-[10px] font-bold uppercase text-brown">Precio Venta Total (AR$)</label>
                     <input
                       type="number"
                       value={editingSale.total ?? 0}
@@ -9500,7 +10229,7 @@ export default function App() {
                   </div>
 
                   <div className="flex flex-col gap-1">
-                    <label className="text-[10px] font-bold uppercase text-amber-900">Costo Total ($)</label>
+                    <label className="text-[10px] font-bold uppercase text-amber-900">Costo Total Estimado (AR$)</label>
                     <input
                       type="number"
                       value={editingSale.totalCost ?? 0}
@@ -9510,7 +10239,7 @@ export default function App() {
                   </div>
 
                   <div className="flex flex-col gap-1">
-                    <label className="text-[10px] font-bold uppercase text-stone">Seña Abonada ($)</label>
+                    <label className="text-[10px] font-bold uppercase text-stone">Seña Abonada (AR$)</label>
                     <input
                       type="number"
                       value={editingSale.senaAmount ?? 0}
@@ -9520,69 +10249,26 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="flex justify-between items-center text-xs font-bold pt-2 border-t border-sand/40">
-                  <span className="text-stone">Ganancia Estimada:</span>
-                  <span className="text-emerald-700 font-mono text-sm">
-                    {fmt((editingSale.total || 0) - (editingSale.totalCost || 0))}
-                  </span>
+                <div className="flex flex-wrap justify-between items-center text-xs font-bold pt-2 border-t border-sand/40 gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-stone">Saldo Pendiente de Cobro:</span>
+                    <span className="text-terra font-mono text-sm">
+                      {fmt(Math.max(0, (editingSale.total || 0) - (editingSale.senaAmount || 0)))}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-stone">Ganancia Estimada:</span>
+                    <span className="text-emerald-700 font-mono text-sm">
+                      {fmt(Math.max(0, (editingSale.total || 0) - (editingSale.totalCost || 0)))}
+                    </span>
+                  </div>
                 </div>
               </div>
 
-              {/* Items Cost/Price Breakdown if available */}
-              {editingSale.items && editingSale.items.length > 0 && (
-                <div className="bg-white border border-sand rounded-xl p-3.5 flex flex-col gap-2">
-                  <h4 className="text-[10px] uppercase font-bold text-stone tracking-wider">
-                    Desglose de Productos ({editingSale.items.length})
-                  </h4>
-                  <div className="flex flex-col gap-2 max-h-40 overflow-y-auto pr-1">
-                    {editingSale.items.map((item: any, idx: number) => (
-                      <div key={idx} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2 bg-light-cream/30 border border-sand/50 rounded-lg text-xs">
-                        <div className="flex-1 min-w-0">
-                          <p className="font-bold text-brown truncate">{item.cant || 1}x {item.nombre}</p>
-                          <p className="text-[9px] text-stone">{item.madera} · {item.cat}</p>
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <div className="flex flex-col gap-0.5">
-                            <span className="text-[8px] uppercase font-bold text-stone">Precio U.</span>
-                            <input
-                              type="number"
-                              value={item.precioUnitario ?? 0}
-                              onChange={(e) => {
-                                const newPrice = Math.max(0, parseFloat(e.target.value) || 0);
-                                const updatedItems = [...editingSale.items];
-                                updatedItems[idx] = { ...item, precioUnitario: newPrice, precioTotal: newPrice * (item.cant || 1) };
-                                const newSumTotal = updatedItems.reduce((acc, it) => acc + (it.precioTotal || 0), 0);
-                                setEditingSale({ ...editingSale, items: updatedItems, total: newSumTotal });
-                              }}
-                              className="w-20 p-1 text-[10px] border border-sand rounded text-right font-mono bg-white"
-                            />
-                          </div>
-                          <div className="flex flex-col gap-0.5">
-                            <span className="text-[8px] uppercase font-bold text-stone">Costo U.</span>
-                            <input
-                              type="number"
-                              value={item.costoUnitario ?? 0}
-                              onChange={(e) => {
-                                const newCost = Math.max(0, parseFloat(e.target.value) || 0);
-                                const updatedItems = [...editingSale.items];
-                                updatedItems[idx] = { ...item, costoUnitario: newCost, costoTotal: newCost * (item.cant || 1) };
-                                const newSumCost = updatedItems.reduce((acc, it) => acc + (it.costoTotal || 0), 0);
-                                setEditingSale({ ...editingSale, items: updatedItems, totalCost: newSumCost });
-                              }}
-                              className="w-20 p-1 text-[10px] border border-sand rounded text-right font-mono bg-white"
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Delivery Date & Notes */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* DELIVERY, PAYMENT STATUS & NOTES */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="flex flex-col gap-1">
-                  <label className="text-[10px] uppercase font-bold text-stone">Fecha de Entrega Estimada</label>
+                  <label className="text-[10px] uppercase font-bold text-stone">Fecha de Entrega</label>
                   <input
                     type="text"
                     value={editingSale.deliveryDate || ''}
@@ -9593,15 +10279,29 @@ export default function App() {
                 </div>
 
                 <div className="flex flex-col gap-1">
+                  <label className="text-[10px] uppercase font-bold text-stone">Estado de Entrega</label>
+                  <select
+                    value={editingSale.status || 'Pendiente'}
+                    onChange={(e) => setEditingSale({ ...editingSale, status: e.target.value })}
+                    className="p-2 border border-sand rounded-lg text-xs bg-white font-semibold text-brown cursor-pointer"
+                  >
+                    <option value="Pendiente">Pendiente</option>
+                    <option value="En Producción">En Producción</option>
+                    <option value="Listo para Entrega">Listo para Entrega</option>
+                    <option value="Entregado">Entregado</option>
+                  </select>
+                </div>
+
+                <div className="flex flex-col gap-1">
                   <label className="text-[10px] uppercase font-bold text-stone">Estado de Pago</label>
                   <select
                     value={editingSale.paymentStatus || 'Señado'}
                     onChange={(e) => setEditingSale({ ...editingSale, paymentStatus: e.target.value })}
-                    className="p-2 border border-sand rounded-lg text-xs bg-white"
+                    className="p-2 border border-sand rounded-lg text-xs bg-white font-semibold text-brown cursor-pointer"
                   >
-                    <option value="Señado">Señado (Seña pagada)</option>
-                    <option value="Pagado">Pagado Completo</option>
                     <option value="Pendiente">Pendiente</option>
+                    <option value="Señado">Señado (Seña abonada)</option>
+                    <option value="Pagado">Pagado Completo</option>
                   </select>
                 </div>
               </div>
@@ -9612,19 +10312,22 @@ export default function App() {
                   rows={2}
                   value={editingSale.notes || ''}
                   onChange={(e) => setEditingSale({ ...editingSale, notes: e.target.value })}
-                  placeholder="Instrucciones especiales de lustre, telas, envío..."
-                  className="w-full p-2 border border-sand rounded-lg text-xs bg-white"
+                  placeholder="Instrucciones especiales de lustre, telas, envío, transporte..."
+                  className="w-full p-2 border border-sand rounded-lg text-xs bg-white focus:ring-1 focus:ring-terra focus:outline-none"
                 />
               </div>
 
-              {/* Attachments Section in Edit Modal */}
-              <div className="flex flex-col gap-1.5 pt-2 border-t border-sand/60">
+              {/* ATTACHMENTS / PLANOS / FOTOS */}
+              <div className="flex flex-col gap-2 pt-2 border-t border-sand/60">
                 <label className="text-[10px] uppercase font-bold text-stone flex items-center justify-between">
-                  <span>Adjuntar / Editar Fotos y Planos</span>
+                  <span className="flex items-center gap-1.5">
+                    <Paperclip className="w-3.5 h-3.5 text-terra" />
+                    Adjuntar / Editar Fotos y Planos
+                  </span>
                   <span className="text-[9px] font-normal text-stone">({editingSale.attachments?.length || 0} adjuntos)</span>
                 </label>
                 
-                <div className="border border-dashed border-sand hover:border-terra bg-light-cream/30 rounded-xl p-3 flex flex-col items-center justify-center gap-1.5 cursor-pointer transition-all relative">
+                <div className="border border-dashed border-sand hover:border-terra bg-light-cream/30 rounded-xl p-3.5 flex flex-col items-center justify-center gap-1.5 cursor-pointer transition-all relative">
                   <input
                     type="file"
                     multiple
@@ -9641,12 +10344,12 @@ export default function App() {
                   />
                   <div className="flex items-center gap-1.5 text-terra font-bold text-xs">
                     <Upload className="w-4 h-4" />
-                    <span>Subir o reemplazar fotos / planos</span>
+                    <span>Subir o agregar más fotos / planos / comprobantes</span>
                   </div>
                 </div>
 
                 {editingSale.attachments && editingSale.attachments.length > 0 && (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-1">
                     {editingSale.attachments.map((att: any) => {
                       const isImg = att.type?.startsWith('image/') || att.dataUrl?.startsWith('data:image/');
                       return (
@@ -9669,7 +10372,7 @@ export default function App() {
                               <button
                                 type="button"
                                 onClick={() => setPreviewImage({ url: att.dataUrl, name: att.name })}
-                                className="text-[8px] font-bold text-terra hover:underline"
+                                className="text-[8px] font-bold text-terra hover:underline cursor-pointer"
                               >
                                 Ver foto
                               </button>
@@ -9683,8 +10386,8 @@ export default function App() {
                                 attachments: (prev.attachments || []).filter((a: any) => a.id !== att.id)
                               }));
                             }}
-                            className="p-1 text-stone hover:text-rose-600 transition-colors"
-                            title="Eliminar"
+                            className="p-1 text-stone hover:text-rose-600 transition-colors cursor-pointer"
+                            title="Eliminar adjunto"
                           >
                             <X className="w-3.5 h-3.5" />
                           </button>
@@ -9697,16 +10400,19 @@ export default function App() {
 
             </div>
 
+            {/* MODAL FOOTER */}
             <div className="flex gap-3 justify-end pt-3 border-t border-sand">
               <button 
+                type="button"
                 onClick={() => setEditingSale(null)}
-                className="bg-transparent text-stone border border-sand hover:border-stone px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all"
+                className="bg-transparent text-stone border border-sand hover:border-stone px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer"
               >
                 Cancelar
               </button>
               <button 
+                type="button"
                 onClick={handleSaveEditedSale}
-                className="bg-brown text-cream px-6 py-2 rounded-lg text-xs font-bold uppercase tracking-wider hover:bg-terra hover:text-white transition-all shadow-md"
+                className="bg-brown text-cream px-6 py-2 rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-terra hover:text-white transition-all shadow-md cursor-pointer"
               >
                 Guardar Cambios
               </button>
@@ -9763,7 +10469,7 @@ export default function App() {
                   
                   {orderForm.isSenaCustom ? (
                     <div className="flex-1 flex items-center justify-end gap-1">
-                      <span className="text-stone text-xs">$</span>
+                      <span className="text-stone text-xs font-bold">AR$</span>
                       <input 
                         type="number" 
                         value={orderForm.senaCustom} 
@@ -10005,7 +10711,7 @@ export default function App() {
 
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-xs font-bold text-stone mb-1">Monto Base ($)</label>
+                  <label className="block text-xs font-bold text-stone mb-1">Monto Base (AR$)</label>
                   <input
                     type="number"
                     step="any"
@@ -10032,8 +10738,8 @@ export default function App() {
                     onChange={e => setEditMovementForm({ ...editMovementForm, currency: e.target.value })}
                     className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs font-bold text-brown"
                   >
-                    <option value="ARS">ARS ($)</option>
-                    <option value="USD">USD ($)</option>
+                    <option value="ARS">ARS (AR$)</option>
+                    <option value="USD">USD (US$)</option>
                   </select>
                 </div>
               </div>
@@ -10353,6 +11059,375 @@ export default function App() {
                 Cerrar
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL REGISTRAR NUEVO MOVIMIENTO (INGRESO O EGRESO) */}
+      {showNewMovementModal && (
+        <div className="fixed inset-0 bg-brown/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-white border-2 border-sand rounded-2xl max-w-2xl w-full p-5 sm:p-6 shadow-2xl relative flex flex-col max-h-[92vh]">
+            {/* MODAL HEADER */}
+            <div className="flex items-center justify-between pb-3 border-b border-sand">
+              <div>
+                <h3 className="font-serif font-bold text-lg text-brown flex items-center gap-2">
+                  <FileText className="w-5 h-5 text-terra" />
+                  Registrar Nuevo Movimiento
+                </h3>
+                <p className="text-xs text-stone mt-0.5">
+                  Cargá un nuevo asiento contable en el Libro Diario de Movimientos.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowNewMovementModal(false)}
+                className="text-stone hover:text-brown p-1 rounded-lg hover:bg-cream cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* TYPE SWITCH PILLS: INGRESO vs EGRESO */}
+            <div className="my-4">
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-stone mb-1.5">
+                Tipo de Operación *
+              </label>
+              <div className="grid grid-cols-2 gap-2 bg-light-cream/70 p-1.5 rounded-xl border border-sand">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNewMovementType('ingreso');
+                    setNewMovementModalForm({
+                      ...newMovementModalForm,
+                      category: 'Aporte de Capital',
+                      description: ''
+                    });
+                  }}
+                  className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                    newMovementType === 'ingreso'
+                      ? 'bg-emerald-700 text-white shadow-sm'
+                      : 'text-emerald-800 hover:bg-emerald-50'
+                  }`}
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>+ Ingreso a Tesorería</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNewMovementType('egreso');
+                    setNewMovementModalForm({
+                      ...newMovementModalForm,
+                      category: 'Alquiler',
+                      description: ''
+                    });
+                  }}
+                  className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                    newMovementType === 'egreso'
+                      ? 'bg-rose-700 text-white shadow-sm'
+                      : 'text-rose-800 hover:bg-rose-50'
+                  }`}
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>- Gasto / Egreso</span>
+                </button>
+              </div>
+            </div>
+
+            <form onSubmit={submitNewMovement} className="overflow-y-auto pr-1 space-y-4">
+              {/* SUB-SELECTOR PARA INGRESOS */}
+              {newMovementType === 'ingreso' && (
+                <div className="bg-emerald-50/60 border border-emerald-200/80 rounded-xl p-3">
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-emerald-900 mb-1.5">
+                    Modalidad del Ingreso
+                  </label>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setNewMovementModalForm({ ...newMovementModalForm, incomeMode: 'directo', orderId: null })}
+                      className={`flex-1 py-1.5 px-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                        newMovementModalForm.incomeMode === 'directo'
+                          ? 'bg-emerald-700 text-white shadow-xs'
+                          : 'bg-white text-emerald-900 border border-emerald-200 hover:bg-emerald-100/50'
+                      }`}
+                    >
+                      Ingreso Directo / Aporte
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const pendingOrders = sales.filter(s => (s.senaAmount || 0) < s.total);
+                        const firstOrder = pendingOrders.length > 0 ? pendingOrders[0] : null;
+                        const rest = firstOrder ? Math.max(0, firstOrder.total - (firstOrder.senaAmount || 0)) : 0;
+                        setNewMovementModalForm({
+                          ...newMovementModalForm,
+                          incomeMode: 'saldo',
+                          orderId: firstOrder ? firstOrder.id : null,
+                          amount: rest > 0 ? String(rest) : newMovementModalForm.amount,
+                          description: firstOrder ? `Cobro saldo pedido #${firstOrder.orderNum} - ${firstOrder.client?.nombre || ''}` : ''
+                        });
+                      }}
+                      className={`flex-1 py-1.5 px-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                        newMovementModalForm.incomeMode === 'saldo'
+                          ? 'bg-emerald-700 text-white shadow-xs'
+                          : 'bg-white text-emerald-900 border border-emerald-200 hover:bg-emerald-100/50'
+                      }`}
+                    >
+                      Cobro Saldo de Pedido
+                    </button>
+                  </div>
+
+                  {newMovementModalForm.incomeMode === 'saldo' && (
+                    <div className="mt-3">
+                      <label className="block text-[10px] font-bold text-emerald-900 uppercase mb-1">
+                        Seleccionar Pedido / Venta Pendiente *
+                      </label>
+                      <select
+                        value={newMovementModalForm.orderId || ''}
+                        onChange={e => {
+                          const oId = Number(e.target.value);
+                          const selOrder = sales.find(s => s.id === oId);
+                          const rest = selOrder ? Math.max(0, selOrder.total - (selOrder.senaAmount || 0)) : 0;
+                          setNewMovementModalForm({
+                            ...newMovementModalForm,
+                            orderId: oId,
+                            amount: rest > 0 ? String(rest) : newMovementModalForm.amount,
+                            description: selOrder ? `Cobro saldo pedido #${selOrder.orderNum} - ${selOrder.client?.nombre || ''}` : ''
+                          });
+                        }}
+                        className="w-full text-xs p-2.5 bg-white border border-emerald-300 rounded-xl text-brown font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        required
+                      >
+                        <option value="" disabled>Seleccioná un pedido pendiente...</option>
+                        {sales.filter(s => (s.senaAmount || 0) < s.total).map(s => {
+                          const saldoPendiente = s.total - (s.senaAmount || 0);
+                          return (
+                            <option key={s.id} value={s.id}>
+                              #{s.orderNum} • {s.client?.nombre || 'Cliente'} • Resta: {fmt(saldoPendiente)} (Total: {fmt(s.total)})
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* CAMPOS PRINCIPALES: FECHA & CATEGORÍA */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-stone mb-1">Fecha *</label>
+                  <input
+                    type="date"
+                    required
+                    value={newMovementModalForm.date}
+                    onChange={e => setNewMovementModalForm({ ...newMovementModalForm, date: e.target.value })}
+                    className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs font-semibold text-brown focus:ring-2 focus:ring-terra/30 focus:bg-white transition-all outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-stone mb-1">Categoría *</label>
+                  {newMovementType === 'ingreso' ? (
+                    <select
+                      value={newMovementModalForm.category}
+                      onChange={e => setNewMovementModalForm({ ...newMovementModalForm, category: e.target.value })}
+                      className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs font-semibold text-brown focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all outline-none"
+                    >
+                      <option value="Aporte de Capital">Aporte de Capital</option>
+                      <option value="Venta Showroom">Venta Showroom Directa</option>
+                      <option value="Cobro de Saldo de Pedido">Cobro de Saldo de Pedido</option>
+                      <option value="Cobro Extraordinario">Cobro Extraordinario</option>
+                      <option value="Reembolso">Reembolso / Devolución</option>
+                      <option value="Transferencia Entrante">Transferencia Entrante</option>
+                      <option value="Otros">Otros Ingresos</option>
+                    </select>
+                  ) : (
+                    <select
+                      value={newMovementModalForm.category}
+                      onChange={e => setNewMovementModalForm({ ...newMovementModalForm, category: e.target.value })}
+                      className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs font-semibold text-brown focus:ring-2 focus:ring-rose-500 focus:bg-white transition-all outline-none"
+                    >
+                      <option value="Alquiler">Alquiler Showroom / Depósito</option>
+                      <option value="Sueldos">Sueldos & Honorarios</option>
+                      <option value="Insumos">Insumos & Materia Prima</option>
+                      <option value="Publicidad">Publicidad & Marketing</option>
+                      <option value="Servicios">Servicios (Luz, Gas, Internet)</option>
+                      <option value="Impuestos">Impuestos & Monotributo</option>
+                      <option value="Fletes">Fletes & Envíos</option>
+                      <option value="Mantenimiento">Mantenimiento & Taller</option>
+                      <option value="Transferencia Saliente">Transferencia Saliente</option>
+                      <option value="Otros">Otros Egresos</option>
+                    </select>
+                  )}
+                </div>
+              </div>
+
+              {/* DESCRIPCIÓN / CLIENTE / PROVEEDOR */}
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-stone mb-1">
+                  {newMovementType === 'ingreso' ? 'Concepto / Cliente / Detalle *' : 'Descripción del Gasto / Proveedor *'}
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder={newMovementType === 'ingreso' ? 'Ej. Venta en efectivo mesa de roble / Aporte Tomás' : 'Ej. Compra de perfiles de hierro / Pago internet'}
+                  value={newMovementModalForm.description}
+                  onChange={e => setNewMovementModalForm({ ...newMovementModalForm, description: e.target.value })}
+                  className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs font-semibold text-brown focus:ring-2 focus:ring-terra/30 focus:bg-white transition-all outline-none"
+                />
+              </div>
+
+              {/* MONTO BASE, IVA Y MONEDA */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-stone mb-1">
+                    Monto Base *
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    required
+                    placeholder="0.00"
+                    value={newMovementModalForm.amount}
+                    onChange={e => setNewMovementModalForm({ ...newMovementModalForm, amount: e.target.value })}
+                    className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs font-bold text-brown focus:ring-2 focus:ring-terra/30 focus:bg-white transition-all outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-stone mb-1">
+                    IVA (%)
+                  </label>
+                  <select
+                    value={newMovementModalForm.iva}
+                    onChange={e => setNewMovementModalForm({ ...newMovementModalForm, iva: e.target.value })}
+                    className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs font-semibold text-brown focus:ring-2 focus:ring-terra/30 focus:bg-white transition-all outline-none"
+                  >
+                    <option value="0">0% (Exento / Sin IVA)</option>
+                    <option value="10.5">10.5% (IVA Reducido)</option>
+                    <option value="21">21% (IVA General)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-stone mb-1">
+                    Moneda
+                  </label>
+                  <select
+                    value={newMovementModalForm.currency}
+                    onChange={e => setNewMovementModalForm({ ...newMovementModalForm, currency: e.target.value })}
+                    className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs font-semibold text-brown focus:ring-2 focus:ring-terra/30 focus:bg-white transition-all outline-none"
+                  >
+                    <option value="ARS">ARS (AR$)</option>
+                    <option value="USD">USD (US$)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* CUENTA Y ESTADO */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-stone mb-1">
+                    Cuenta de Tesorería *
+                  </label>
+                  <select
+                    value={newMovementModalForm.account}
+                    onChange={e => setNewMovementModalForm({ ...newMovementModalForm, account: e.target.value })}
+                    className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs font-semibold text-brown focus:ring-2 focus:ring-terra/30 focus:bg-white transition-all outline-none"
+                  >
+                    <option value="Efectivo">Efectivo (Caja Chica)</option>
+                    <option value="Santander">Banco Santander</option>
+                    <option value="Banco Galicia CC">Banco Galicia CC</option>
+                    <option value="Uala">Ualá / Mercado Pago</option>
+                    <option value="Banco BBVA">Banco BBVA</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-stone mb-1">
+                    Estado del Movimiento *
+                  </label>
+                  <select
+                    value={newMovementModalForm.pendingPayment ? 'pendiente' : 'realizado'}
+                    onChange={e => setNewMovementModalForm({ ...newMovementModalForm, pendingPayment: e.target.value === 'pendiente' })}
+                    className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs font-semibold text-brown focus:ring-2 focus:ring-terra/30 focus:bg-white transition-all outline-none"
+                  >
+                    <option value="realizado">
+                      {newMovementType === 'ingreso' ? 'Cobrado / Efectivizado' : 'Pagado / Efectivizado'}
+                    </option>
+                    <option value="pendiente">
+                      {newMovementType === 'ingreso' ? 'Pendiente de Cobro' : 'Pendiente de Pago'}
+                    </option>
+                  </select>
+                </div>
+              </div>
+
+              {/* NOTAS ADICIONALES */}
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-stone mb-1">
+                  Notas / Observaciones
+                </label>
+                <input
+                  type="text"
+                  placeholder="Número de comprobante, factura o comentarios opcionales..."
+                  value={newMovementModalForm.note}
+                  onChange={e => setNewMovementModalForm({ ...newMovementModalForm, note: e.target.value })}
+                  className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs text-brown focus:ring-2 focus:ring-terra/30 focus:bg-white transition-all outline-none"
+                />
+              </div>
+
+              {/* TOTAL CALCULADO RESUMEN */}
+              {(() => {
+                const bAmt = parseFloat(newMovementModalForm.amount) || 0;
+                const ivaP = parseFloat(newMovementModalForm.iva || '0') || 0;
+                const tot = bAmt * (1 + ivaP / 100);
+                const isUsd = newMovementModalForm.currency === 'USD';
+                return (
+                  <div className={`p-3.5 rounded-xl border flex items-center justify-between ${
+                    newMovementType === 'ingreso' ? 'bg-emerald-50 border-emerald-200' : 'bg-rose-50 border-rose-200'
+                  }`}>
+                    <div>
+                      <span className="text-[10px] uppercase font-bold text-stone tracking-wider block">
+                        Total {newMovementType === 'ingreso' ? 'a Ingresar' : 'a Egresar'}
+                      </span>
+                      {ivaP > 0 && (
+                        <span className="text-[11px] text-stone">
+                          Base: {isUsd ? `US$ ${bAmt.toLocaleString('es-AR')}` : fmt(bAmt)} | IVA ({ivaP}%): {isUsd ? `US$ ${(tot - bAmt).toLocaleString('es-AR')}` : fmt(tot - bAmt)}
+                        </span>
+                      )}
+                    </div>
+                    <span className={`text-xl font-mono font-bold ${
+                      newMovementType === 'ingreso' ? 'text-emerald-800' : 'text-rose-800'
+                    }`}>
+                      {newMovementType === 'ingreso' ? '+' : '-'}{isUsd ? `US$ ${tot.toLocaleString('es-AR')}` : fmt(tot)}
+                    </span>
+                  </div>
+                );
+              })()}
+
+              {/* BOTONES ACCIÓN */}
+              <div className="flex justify-end gap-3 pt-3 border-t border-sand">
+                <button
+                  type="button"
+                  onClick={() => setShowNewMovementModal(false)}
+                  className="px-4 py-2.5 rounded-xl text-xs font-bold border border-sand text-stone hover:bg-cream cursor-pointer transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className={`px-5 py-2.5 rounded-xl text-xs font-bold text-white transition-all cursor-pointer shadow-sm flex items-center gap-2 ${
+                    newMovementType === 'ingreso'
+                      ? 'bg-emerald-700 hover:bg-emerald-800'
+                      : 'bg-rose-700 hover:bg-rose-800'
+                  }`}
+                >
+                  <CheckCircle className="w-4 h-4" />
+                  <span>{newMovementType === 'ingreso' ? 'Guardar Ingreso' : 'Guardar Egreso'}</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

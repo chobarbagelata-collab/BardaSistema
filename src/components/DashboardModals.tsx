@@ -1190,7 +1190,7 @@ const ResultadoEstimadoModal: React.FC<{
                   <th className="py-2.5 px-3">Cliente</th>
                   <th className="py-2.5 px-3 text-right">Precio Venta</th>
                   <th className="py-2.5 px-3 text-right">Costo Material</th>
-                  <th className="py-2.5 px-3 text-right">Margen ($)</th>
+                  <th className="py-2.5 px-3 text-right">Margen (AR$)</th>
                   <th className="py-2.5 px-3.5 text-right">% Margen</th>
                 </tr>
               </thead>

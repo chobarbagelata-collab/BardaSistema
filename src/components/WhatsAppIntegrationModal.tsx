@@ -42,7 +42,7 @@ interface ChatMessage {
 export const WhatsAppIntegrationModal: React.FC<WhatsAppIntegrationModalProps> = ({
   isOpen,
   onClose,
-  fmt = (v: number) => '$ ' + (v || 0).toLocaleString('es-AR'),
+  fmt = (v: number) => 'AR$ ' + (v || 0).toLocaleString('es-AR'),
   onApplyTransaction
 }) => {
   const [activeTab, setActiveTab] = useState<'simulator' | 'guide'>('simulator');

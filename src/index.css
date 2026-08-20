@@ -10,8 +10,8 @@
   --color-white: #FFFDF9;
   --color-error: #B94040;
   
-  --font-serif: "Playfair Display", serif;
-  --font-sans: "Mulish", sans-serif;
+  --font-serif: "Exo 2", sans-serif;
+  --font-sans: "Exo 2", sans-serif;
 }
 
 @layer base {

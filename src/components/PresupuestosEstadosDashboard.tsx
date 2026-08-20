@@ -494,7 +494,7 @@ export const PresupuestosEstadosDashboard: React.FC<PresupuestosEstadosDashboard
 
                       {/* DESCUENTO */}
                       <td className="py-2.5 px-3 text-right font-medium text-rose-700">
-                        {discountVal > 0 ? `- ${fmt(discountVal)}` : '$ 0'}
+                        {discountVal > 0 ? `- ${fmt(discountVal)}` : 'AR$ 0'}
                       </td>
 
                       {/* SUBTOTAL CON DESCUENTO / TOTAL FINAL */}

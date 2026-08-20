@@ -156,8 +156,8 @@ function parseMessageHeuristically(text: string, currentDate: string): ParsedWha
         account,
         date: currentDate,
       },
-      humanReadableSummary: `Gasto de $${amount.toLocaleString()} en "${concept}" pagado con ${account}`,
-      suggestedReply: `✅ *Gasto Registrado en Barda ERP*\n• *Concepto:* ${concept}\n• *Monto:* $${amount.toLocaleString()}\n• *Cuenta:* ${account}\n• *Fecha:* ${currentDate}`,
+      humanReadableSummary: `Gasto de AR$ ${amount.toLocaleString('es-AR')} en "${concept}" pagado con ${account}`,
+      suggestedReply: `✅ *Gasto Registrado en Barda ERP*\n• *Concepto:* ${concept}\n• *Monto:* AR$ ${amount.toLocaleString('es-AR')}\n• *Cuenta:* ${account}\n• *Fecha:* ${currentDate}`,
     };
   }
 
@@ -173,8 +173,8 @@ function parseMessageHeuristically(text: string, currentDate: string): ParsedWha
         sena: amount || 0,
         date: currentDate,
       },
-      humanReadableSummary: `Cobro / Seña de $${amount.toLocaleString()} recibido en ${account}`,
-      suggestedReply: `✅ *Cobro Registrado en Barda ERP*\n• *Monto:* $${amount.toLocaleString()}\n• *Cuenta:* ${account}\n• *Fecha:* ${currentDate}`,
+      humanReadableSummary: `Cobro / Seña de AR$ ${amount.toLocaleString('es-AR')} recibido en ${account}`,
+      suggestedReply: `✅ *Cobro Registrado en Barda ERP*\n• *Monto:* AR$ ${amount.toLocaleString('es-AR')}\n• *Cuenta:* ${account}\n• *Fecha:* ${currentDate}`,
     };
   }
 
@@ -188,8 +188,8 @@ function parseMessageHeuristically(text: string, currentDate: string): ParsedWha
         account,
         date: currentDate,
       },
-      humanReadableSummary: `Nuevo pedido de venta por total $${amount.toLocaleString()}`,
-      suggestedReply: `🛋️ *Nuevo Pedido Creado*\n• *Total:* $${amount.toLocaleString()}\n• *Cuenta:* ${account}\n• *Fecha:* ${currentDate}`,
+      humanReadableSummary: `Nuevo pedido de venta por total AR$ ${amount.toLocaleString('es-AR')}`,
+      suggestedReply: `🛋️ *Nuevo Pedido Creado*\n• *Total:* AR$ ${amount.toLocaleString('es-AR')}\n• *Cuenta:* ${account}\n• *Fecha:* ${currentDate}`,
     };
   }
 
