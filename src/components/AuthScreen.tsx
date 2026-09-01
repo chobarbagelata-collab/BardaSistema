@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, UserRole, UserPermissions, DEFAULT_PERMISSIONS_BY_ROLE, Invitation } from '../types';
+import { User, UserRole, UserPermissions, DEFAULT_PERMISSIONS_BY_ROLE, Invitation, normalizeUserPermissions } from '../types';
 import { Key, Mail, User as UserIcon, LogIn, Check, AlertCircle, ShieldAlert } from 'lucide-react';
 import { BardaLogo } from './BardaLogo';
 import { 
@@ -218,7 +218,8 @@ export default function AuthScreen({ onLoginSuccess }: AuthScreenProps) {
           return;
         }
 
-        const matchedUser = userDoc.data() as User;
+        const userDocData = userDoc.data() as User;
+        const matchedUser = normalizeUserPermissions(userDocData) || userDocData;
         
         // Migrate legacy localStorage data to Firestore if they are administrator logging in
         if (matchedUser.role === 'Administrador') {
@@ -265,7 +266,7 @@ export default function AuthScreen({ onLoginSuccess }: AuthScreenProps) {
         
         {/* LOGO & HERO */}
         <div className="text-center flex flex-col items-center justify-center gap-2 pb-2">
-          <BardaLogo variant="vertical" size="xl" subtitleText="PRESUPUESTOS Y VENTAS" interactive={false} />
+          <BardaLogo variant="vertical" size="xl" subtitleText="MODERN FURNITURE" />
           
           {isFirstRun ? (
             <div className="mt-4 p-3 bg-amber-50 border border-terra/20 rounded-xl flex items-start gap-2.5 text-left">

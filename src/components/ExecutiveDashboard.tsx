@@ -10,7 +10,8 @@ import {
   ShoppingBag,
   CreditCard,
   RefreshCw,
-  ExternalLink
+  ExternalLink,
+  Package
 } from 'lucide-react';
 import { DashboardModals, DashboardModalType } from './DashboardModals';
 import { BusinessHealth } from './BusinessHealth';
@@ -34,6 +35,8 @@ interface ExecutiveDashboardProps {
   sales?: any[];
   paymentsLedger?: any[];
   fixedCosts?: any[];
+  stockList?: any[];
+  stockMovements?: any[];
 }
 
 export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
@@ -60,7 +63,9 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
   ],
   sales = [],
   paymentsLedger = [],
-  fixedCosts = []
+  fixedCosts = [],
+  stockList = [],
+  stockMovements = []
 }) => {
   const [selectedPeriod, setSelectedPeriod] = useState<'3M' | '6M' | '1Y'>('6M');
   const [activeModal, setActiveModal] = useState<DashboardModalType | null>(null);
@@ -187,6 +192,10 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
     .reduce((acc, p) => acc + (Number(p.amount) || 0), 0);
 
   const totalDisponible = cashTotal + bankTotal;
+
+  // Capital inmovilizado en stock (Inversión en Activos/Inventario)
+  const totalStockInvestment = stockList.reduce((acc, it) => acc + ((Number(it.qty) || 0) * (Number(it.costUnit) || 0)), 0);
+  const totalStockUnits = stockList.reduce((acc, it) => acc + (Number(it.qty) || 0), 0);
 
   // Recent movements
   const recentMovements = [...paymentsLedger]
@@ -671,6 +680,25 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
                 </div>
                 <span className="text-[10px] text-rose-700 opacity-0 group-hover:opacity-100 font-bold transition-opacity">
                   Ver ↗
+                </span>
+              </div>
+
+              {/* CAPITAL INMOVILIZADO EN STOCK (INVERSIÓN EN MERCADERÍA) */}
+              <div
+                className="p-4 bg-indigo-50/70 border border-indigo-100 rounded-xl flex items-center justify-between transition-all"
+                title="Capital activo inmovilizado en productos listos para la venta"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-indigo-600 text-white rounded-lg">
+                    <Package className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-900">Capital en Stock (Activo)</div>
+                    <div className="text-lg font-serif font-bold text-indigo-950">{fmt(totalStockInvestment)}</div>
+                  </div>
+                </div>
+                <span className="text-[11px] font-mono font-bold text-indigo-700 bg-indigo-100/60 px-2 py-0.5 rounded">
+                  {totalStockUnits} u.
                 </span>
               </div>
             </div>

@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 460 360" width="100%" height="100%">
+  <defs>
+    <style>
+      .bg-shadow { fill: #EBDAD2; }
+      .outline-stroke { stroke: #2E180E; stroke-width: 6.5; stroke-linecap: round; stroke-linejoin: round; }
+      .outline-thin { stroke: #2E180E; stroke-width: 4.5; stroke-linecap: round; stroke-linejoin: round; }
+      .teal-fill { fill: #7AA2AC; }
+      .wood-fill { fill: #C7824B; }
+      .cream-fill { fill: #FDFBF7; }
+    </style>
+  </defs>
+
+  <!-- Floor Shadow -->
+  <ellipse cx="230" cy="335" rx="195" ry="13" class="bg-shadow" />
+
+  <!-- Chair Legs -->
+  <line x1="190" y1="245" x2="175" y2="320" class="outline-stroke" />
+  <line x1="270" y1="245" x2="285" y2="320" class="outline-stroke" />
+  <line x1="145" y1="248" x2="116" y2="340" class="outline-stroke" />
+  <line x1="315" y1="248" x2="344" y2="340" class="outline-stroke" />
+
+  <!-- Outer Chair Body Frame -->
+  <path d="M 120 238 C 80 238, 72 140, 72 100 C 72 48, 120 18, 230 18 C 340 18, 388 48, 388 100 C 388 140, 380 238, 340 238 C 290 258, 170 258, 120 238 Z" fill="#FDFBF7" stroke="#2E180E" stroke-width="7" stroke-linejoin="round" />
+
+  <!-- Backrest Inner Teal Cushion -->
+  <path d="M 152 205 C 140 205, 128 185, 128 100 C 128 55, 160 30, 230 30 C 300 30, 332 55, 332 100 C 332 185, 320 205, 308 205 Z" class="teal-fill" stroke="#2E180E" stroke-width="6" stroke-linejoin="round" />
+
+  <!-- Backrest Vertical Stitching Lines -->
+  <line x1="170" y1="36" x2="170" y2="185" class="outline-stroke" />
+  <line x1="210" y1="32" x2="210" y2="185" class="outline-stroke" />
+  <line x1="250" y1="32" x2="250" y2="185" class="outline-stroke" />
+  <line x1="290" y1="36" x2="290" y2="185" class="outline-stroke" />
+
+  <!-- Left Armrest Wood Shell -->
+  <path d="M 146 85 C 110 90, 82 120, 82 165 C 82 210, 110 230, 152 230 C 156 230, 160 200, 160 150 C 160 105, 155 88, 146 85 Z" class="wood-fill" stroke="#2E180E" stroke-width="6.5" stroke-linejoin="round" />
+  <path d="M 105 125 C 98 140, 98 175, 106 195" fill="none" class="outline-thin" />
+  <path d="M 122 110 C 114 135, 114 185, 125 208" fill="none" class="outline-thin" />
+  <path d="M 138 102 C 130 135, 130 195, 142 218" fill="none" class="outline-thin" />
+
+  <!-- Right Armrest Wood Shell -->
+  <path d="M 314 85 C 350 90, 378 120, 378 165 C 378 210, 350 230, 308 230 C 304 230, 300 200, 300 150 C 300 105, 305 88, 314 85 Z" class="wood-fill" stroke="#2E180E" stroke-width="6.5" stroke-linejoin="round" />
+  <path d="M 355 125 C 362 140, 362 175, 354 195" fill="none" class="outline-thin" />
+  <path d="M 338 110 C 346 135, 346 185, 335 208" fill="none" class="outline-thin" />
+  <path d="M 322 102 C 330 135, 330 195, 318 218" fill="none" class="outline-thin" />
+
+  <!-- Seat Bottom Rim / Wood Apron -->
+  <path d="M 116 215 C 116 242, 344 242, 344 215 Z" fill="#C7824B" stroke="#2E180E" stroke-width="6.5" />
+
+  <!-- Seat Cushion -->
+  <rect x="112" y="174" width="236" height="48" rx="24" fill="#FDFBF7" stroke="#2E180E" stroke-width="6.5" />
+  <rect x="120" y="180" width="220" height="36" rx="18" class="teal-fill" stroke="#2E180E" stroke-width="5" />
+</svg>

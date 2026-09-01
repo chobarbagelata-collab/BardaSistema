@@ -13,9 +13,42 @@ export interface Permission {
   edit: boolean;
 }
 
+export interface StockItem {
+  id: string;
+  name: string;
+  category: string;
+  detail: string;
+  qty: number;
+  costUnit: number;
+  priceSuggested: number;
+  minAlertQty?: number;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface StockMovement {
+  id: string;
+  stockItemId?: string;
+  itemId?: string;
+  itemName: string;
+  type: 'IN_COMPRA' | 'IN_FABRICACION' | 'OUT_VENTA' | 'AJUSTE';
+  qty: number;
+  costUnit?: number;
+  unitCost?: number;
+  totalCost: number;
+  relatedOrderId?: string | number;
+  relatedOrderNum?: string;
+  account?: string; // 'Santander' | 'Uala' | 'Efectivo'
+  notes?: string;
+  date: string;
+  createdBy?: string;
+  createdAt?: string;
+}
+
 export interface UserPermissions {
   presupuestos: Permission;
   ventas: Permission;
+  stock: Permission;
   remitos: Permission;
   fabricacion: Permission;
   finanzas: Permission;
@@ -48,6 +81,7 @@ export const DEFAULT_PERMISSIONS_BY_ROLE: Record<UserRole, UserPermissions> = {
   Administrador: {
     presupuestos: { view: true, edit: true },
     ventas: { view: true, edit: true },
+    stock: { view: true, edit: true },
     remitos: { view: true, edit: true },
     fabricacion: { view: true, edit: true },
     finanzas: { view: true, edit: true },
@@ -57,6 +91,7 @@ export const DEFAULT_PERMISSIONS_BY_ROLE: Record<UserRole, UserPermissions> = {
   Vendedor: {
     presupuestos: { view: true, edit: true },
     ventas: { view: true, edit: false },
+    stock: { view: true, edit: true },
     remitos: { view: true, edit: false },
     fabricacion: { view: true, edit: false },
     finanzas: { view: false, edit: false },
@@ -66,6 +101,7 @@ export const DEFAULT_PERMISSIONS_BY_ROLE: Record<UserRole, UserPermissions> = {
   Taller: {
     presupuestos: { view: false, edit: false },
     ventas: { view: false, edit: false },
+    stock: { view: true, edit: true },
     remitos: { view: false, edit: false },
     fabricacion: { view: true, edit: true },
     finanzas: { view: false, edit: false },
@@ -75,6 +111,7 @@ export const DEFAULT_PERMISSIONS_BY_ROLE: Record<UserRole, UserPermissions> = {
   Administrativo: {
     presupuestos: { view: true, edit: true },
     ventas: { view: true, edit: true },
+    stock: { view: true, edit: true },
     remitos: { view: true, edit: true },
     fabricacion: { view: true, edit: false },
     finanzas: { view: true, edit: true },
@@ -84,6 +121,7 @@ export const DEFAULT_PERMISSIONS_BY_ROLE: Record<UserRole, UserPermissions> = {
   Personalizado: {
     presupuestos: { view: false, edit: false },
     ventas: { view: false, edit: false },
+    stock: { view: false, edit: false },
     remitos: { view: false, edit: false },
     fabricacion: { view: false, edit: false },
     finanzas: { view: false, edit: false },
@@ -98,4 +136,23 @@ export const formatAbbreviatedName = (name: string): string => {
   const parts = clean.split(/\s+/);
   const initials = parts.map(p => p.charAt(0).toUpperCase()).join('');
   return initials;
+};
+
+export const normalizeUserPermissions = (user: User | null): User | null => {
+  if (!user) return null;
+  const roleDefaults = DEFAULT_PERMISSIONS_BY_ROLE[user.role] || DEFAULT_PERMISSIONS_BY_ROLE.Administrador;
+  const currentPermissions = user.permissions || ({} as Partial<UserPermissions>);
+  return {
+    ...user,
+    permissions: {
+      presupuestos: currentPermissions.presupuestos || roleDefaults.presupuestos,
+      ventas: currentPermissions.ventas || roleDefaults.ventas,
+      stock: currentPermissions.stock || roleDefaults.stock || { view: true, edit: true },
+      remitos: currentPermissions.remitos || roleDefaults.remitos,
+      fabricacion: currentPermissions.fabricacion || roleDefaults.fabricacion,
+      finanzas: currentPermissions.finanzas || roleDefaults.finanzas,
+      resumen: currentPermissions.resumen || roleDefaults.resumen,
+      usuarios: currentPermissions.usuarios || roleDefaults.usuarios,
+    }
+  };
 };

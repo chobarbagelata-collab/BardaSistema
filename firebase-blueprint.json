@@ -69,6 +69,42 @@
         "type": { "type": "string" }
       },
       "required": ["id", "amount", "date"]
+    },
+    "StockItem": {
+      "title": "StockItem",
+      "description": "Inventory stock items managed in the system",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "category": { "type": "string" },
+        "qty": { "type": "number" },
+        "minQty": { "type": "number" },
+        "costUnit": { "type": "number" },
+        "priceSuggested": { "type": "number" },
+        "notes": { "type": "string" },
+        "details": { "type": "object" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "name", "category", "qty"]
+    },
+    "StockMovement": {
+      "title": "StockMovement",
+      "description": "History log of stock additions, adjustments, and order dispatches",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "itemId": { "type": "string" },
+        "itemName": { "type": "string" },
+        "type": { "type": "string", "enum": ["ingreso", "egreso", "ajuste"] },
+        "qty": { "type": "number" },
+        "previousQty": { "type": "number" },
+        "newQty": { "type": "number" },
+        "reason": { "type": "string" },
+        "userName": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "itemId", "type", "qty", "createdAt"]
     }
   },
   "firestore": {
@@ -103,6 +139,14 @@
     "barda_fabricacion_list": {
       "schema": { "$ref": "FabricationItem" },
       "description": "Workshop manufacturing tasks and items status"
+    },
+    "barda_stock_items": {
+      "schema": "StockItem",
+      "description": "Available product stock and materials"
+    },
+    "barda_stock_movements": {
+      "schema": "StockMovement",
+      "description": "Audit trail log of all inventory changes"
     }
   }
 }

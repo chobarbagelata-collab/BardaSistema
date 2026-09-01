@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, UserRole, UserPermissions, DEFAULT_PERMISSIONS_BY_ROLE, Invitation, Permission } from '../types';
+import { User, UserRole, UserPermissions, DEFAULT_PERMISSIONS_BY_ROLE, Invitation, Permission, normalizeUserPermissions } from '../types';
 import { 
   Users, Mail, Shield, ShieldAlert, Plus, Trash2, Key, Check, Copy, CheckCircle, 
   Eye, Edit3, X, UserX, UserCheck, AlertCircle, Sparkles
@@ -9,7 +9,8 @@ import {
   getDocs, 
   doc, 
   setDoc, 
-  deleteDoc 
+  deleteDoc,
+  onSnapshot
 } from "firebase/firestore";
 import { db } from "../firebase";
 
@@ -41,36 +42,40 @@ export default function UserManagement({ currentUser, onLogout }: UserManagement
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
-  // Load users and invitations from Firestore
+  // Load users and invitations from Firestore with real-time sync
   useEffect(() => {
-    loadData();
-  }, []);
-
-  const loadData = async () => {
     setLoading(true);
-    try {
-      // 1. Fetch users from Firestore
-      const usersSnapshot = await getDocs(collection(db, "barda_users"));
+
+    const unsubUsers = onSnapshot(collection(db, "barda_users"), (snapshot) => {
       const fetchedUsers: User[] = [];
-      usersSnapshot.forEach((docSnap) => {
-        fetchedUsers.push({ id: docSnap.id, ...docSnap.data() } as User);
+      snapshot.forEach((docSnap) => {
+        const raw = { id: docSnap.id, ...docSnap.data() } as User;
+        const norm = normalizeUserPermissions(raw) || raw;
+        fetchedUsers.push(norm);
       });
       setUsers(fetchedUsers);
+      setLoading(false);
+    }, (e) => {
+      console.error('Error listening to users from Firestore', e);
+      setErrorMsg('Error al conectar con la base de datos de usuarios.');
+      setLoading(false);
+    });
 
-      // 2. Fetch invitations from Firestore
-      const invitesSnapshot = await getDocs(collection(db, "barda_invitations"));
+    const unsubInvites = onSnapshot(collection(db, "barda_invitations"), (snapshot) => {
       const fetchedInvites: Invitation[] = [];
-      invitesSnapshot.forEach((docSnap) => {
+      snapshot.forEach((docSnap) => {
         fetchedInvites.push({ id: docSnap.id, ...docSnap.data() } as Invitation);
       });
       setInvitations(fetchedInvites);
-    } catch (e) {
-      console.error('Error loading users/invitations from Firestore', e);
-      setErrorMsg('Error al conectar con la base de datos de usuarios.');
-    } finally {
-      setLoading(false);
-    }
-  };
+    }, (e) => {
+      console.error('Error listening to invitations from Firestore', e);
+    });
+
+    return () => {
+      unsubUsers();
+      unsubInvites();
+    };
+  }, []);
 
   // When inviteRole changes, preset permissions
   const handleRoleChange = (role: UserRole) => {
@@ -327,7 +332,8 @@ export default function UserManagement({ currentUser, onLogout }: UserManagement
     { key: 'ventas', label: 'Ventas y Pedidos' },
     { key: 'remitos', label: 'Remitos' },
     { key: 'fabricacion', label: 'Fabricación' },
-    { key: 'finanzas', label: 'Finanzas' },
+    { key: 'stock', label: 'Stock e Inventario' },
+    { key: 'finanzas', label: 'Tesorería y Finanzas' },
     { key: 'resumen', label: 'Resumen (Estadísticas)' },
     { key: 'usuarios', label: 'Usuarios y Permisos' }
   ];

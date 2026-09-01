@@ -17,11 +17,20 @@ import { WhatsAppIntegrationModal } from './components/WhatsAppIntegrationModal'
 import { DashboardModals, DashboardModalType } from './components/DashboardModals';
 import { TransactionDetailModal, TransactionDetailItem } from './components/TransactionDetailModal';
 import { SaleDetailModal } from './components/SaleDetailModal';
+import { StockManager } from './components/StockManager';
 import { ParsedWhatsAppMessage } from './server/whatsappService';
-import { User, UserPermissions, DEFAULT_PERMISSIONS_BY_ROLE, formatAbbreviatedName } from './types';
+import { User, UserPermissions, DEFAULT_PERMISSIONS_BY_ROLE, formatAbbreviatedName, StockItem, StockMovement, normalizeUserPermissions } from './types';
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth } from "./firebase";
-import { fetchFirestoreCollection, saveCollectionBatch } from './firebaseSync';
+import { 
+  fetchFirestoreCollection, 
+  saveCollectionBatch, 
+  saveFirestoreDocument, 
+  deleteFirestoreDocument,
+  subscribeToFirestoreCollection,
+  migrateAllLocalStorageToFirestore,
+  JULIETA_VERA_ORDER
+} from './firebaseSync';
 
 // BRAND COLORS & ESTHETICS PRE-CONFIGURED VIA INDEX.CSS:
 // --brown: #3D1F0D, --terra: #C47A3A, --cream: #F2E8D9, --light-cream: #FAF6F0
@@ -425,32 +434,37 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     try {
       const stored = localStorage.getItem('barda_current_user');
-      return stored ? JSON.parse(stored) : null;
+      return stored ? normalizeUserPermissions(JSON.parse(stored)) : null;
     } catch {
       return null;
     }
   });
 
+  const [firebaseAuthUser, setFirebaseAuthUser] = useState<any>(null);
   const isFirebaseLoaded = useRef(false);
 
   // Monitor Firebase Authentication status dynamically
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
+      setFirebaseAuthUser(fbUser);
       if (fbUser) {
+        migrateAllLocalStorageToFirestore().catch((e) => console.warn("Background sync:", e));
         try {
           const { doc, getDoc } = await import("firebase/firestore");
           const { db } = await import("./firebase");
           const userDoc = await getDoc(doc(db, "barda_users", fbUser.uid));
           if (userDoc.exists()) {
-            const userData = userDoc.data() as User;
-            setCurrentUser(userData);
-            localStorage.setItem('barda_current_user', JSON.stringify(userData));
+            const userData = normalizeUserPermissions(userDoc.data() as User);
+            if (userData) {
+              setCurrentUser(userData);
+              localStorage.setItem('barda_current_user', JSON.stringify(userData));
+            }
           }
         } catch (err) {
           console.warn("Offline or network issue fetching Firestore user, keeping cached local user session:", err);
           const stored = localStorage.getItem('barda_current_user');
           if (!stored && fbUser.email) {
-            const fallbackUser: User = {
+            const fallbackUser = normalizeUserPermissions({
               id: fbUser.uid,
               name: fbUser.displayName || fbUser.email.split('@')[0],
               email: fbUser.email,
@@ -458,9 +472,11 @@ export default function App() {
               role: 'Vendedor',
               permissions: DEFAULT_PERMISSIONS_BY_ROLE.Vendedor,
               createdAt: new Date().toISOString()
-            };
-            setCurrentUser(fallbackUser);
-            localStorage.setItem('barda_current_user', JSON.stringify(fallbackUser));
+            });
+            if (fallbackUser) {
+              setCurrentUser(fallbackUser);
+              localStorage.setItem('barda_current_user', JSON.stringify(fallbackUser));
+            }
           }
         }
       } else {
@@ -475,18 +491,45 @@ export default function App() {
   }, []);
 
   // Navigation states
-  const [activeTab, setActiveTab] = useState<'presupuestos' | 'ventas' | 'resumen' | 'finanzas' | 'usuarios'>('presupuestos');
+  const [activeTab, setActiveTab] = useState<'presupuestos' | 'ventas' | 'resumen' | 'finanzas' | 'stock' | 'usuarios'>('presupuestos');
   const [ventasSubTab, setVentasSubTab] = useState<'ventas' | 'remitos' | 'fabricacion'>('ventas');
   const [presupuestosSubTab, setPresupuestosSubTab] = useState<'nuevo' | 'estados'>('nuevo');
   const [resumenViewMode, setResumenViewMode] = useState<'dashboard' | 'conversion'>('dashboard');
-  const [addTab, setAddTab] = useState<'silla' | 'mesa' | 'circular' | 'ratona' | 'otro'>('silla');
+  const [addTab, setAddTab] = useState<'silla' | 'mesa' | 'circular' | 'ratona' | 'stock' | 'otro'>('silla');
+  const [selectedStockForQuote, setSelectedStockForQuote] = useState<string>('');
+  const [stockQuoteQty, setStockQuoteQty] = useState<number>(1);
+  const [stockQuoteCustomPrice, setStockQuoteCustomPrice] = useState<string>('');
 
   // User Dropdown and Profile states
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
+  const [showCompanyLogoModal, setShowCompanyLogoModal] = useState(false);
   const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
   const [activeTesoreriaModal, setActiveTesoreriaModal] = useState<DashboardModalType | null>(null);
+  const [isManualSyncing, setIsManualSyncing] = useState(false);
+  const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
+
+  const handleManualSync = async () => {
+    setIsManualSyncing(true);
+    setSyncFeedback(null);
+    try {
+      await migrateAllLocalStorageToFirestore();
+      const freshSales = await fetchFirestoreCollection('barda_sales_orders');
+      if (freshSales && freshSales.length > 0) {
+        setSales(freshSales);
+        localStorage.setItem('barda_sales_orders', JSON.stringify(freshSales));
+      }
+      setSyncFeedback('¡Sincronizado con éxito!');
+      setTimeout(() => setSyncFeedback(null), 3500);
+    } catch (e) {
+      console.warn("Manual sync error:", e);
+      setSyncFeedback('Error al sincronizar');
+      setTimeout(() => setSyncFeedback(null), 3500);
+    } finally {
+      setIsManualSyncing(false);
+    }
+  };
 
   const handleApplyWhatsAppTransaction = (parsed: ParsedWhatsAppMessage) => {
     const currentDate = parsed.extractedData.date || new Date().toISOString().split('T')[0];
@@ -584,7 +627,12 @@ export default function App() {
         source: 'WhatsApp'
       };
 
-      setSales(prev => [newOrder, ...prev]);
+      setSales(prev => {
+        const next = [newOrder, ...prev];
+        localStorage.setItem('barda_sales_orders', JSON.stringify(next));
+        return next;
+      });
+      saveFirestoreDocument('barda_sales_orders', String(newOrder.id), newOrder);
 
       if (sena > 0) {
         const senaPayment = {
@@ -601,7 +649,12 @@ export default function App() {
           pendingPayment: false,
           note: `Seña inicial recibida vía WhatsApp para pedido ${newOrderNum}`
         };
-        setPaymentsLedger(prev => [senaPayment, ...prev]);
+        setPaymentsLedger(prev => {
+          const next = [senaPayment, ...prev];
+          localStorage.setItem('barda_payments_ledger', JSON.stringify(next));
+          return next;
+        });
+        saveFirestoreDocument('barda_payments_ledger', String(senaPayment.id), senaPayment);
       }
     }
   };
@@ -617,6 +670,10 @@ export default function App() {
   }, []);
 
   // Financial States
+  // Stock Management States
+  const [stockList, setStockList] = useState<StockItem[]>([]);
+  const [stockMovements, setStockMovements] = useState<StockMovement[]>([]);
+
   const [fixedCosts, setFixedCosts] = useState<any[]>([]);
   const [paymentsLedger, setPaymentsLedger] = useState<any[]>([]);
   const [newFixedCost, setNewFixedCost] = useState({
@@ -761,6 +818,13 @@ export default function App() {
     });
   };
   const [editingSale, setEditingSale] = useState<any | null>(null);
+  const [showEditSaleCatalogPicker, setShowEditSaleCatalogPicker] = useState<boolean>(false);
+  const [editSaleCategory, setEditSaleCategory] = useState<'sillas' | 'mesas' | 'circular' | 'ratonas' | 'otros'>('sillas');
+  const [editSaleSillaForm, setEditSaleSillaForm] = useState({ model: '', wood: 'PETIRIBI', fabric: 'Lienzo', color: '', qty: 1 });
+  const [editSaleMesaForm, setEditSaleMesaForm] = useState({ wood: '', w: '1.80', h: '0.90', base: 'Base Madera', color: '', veteado: '', brillo: '', baseMadera: '', qty: 1 });
+  const [editSaleCircularForm, setEditSaleCircularForm] = useState({ wood: '', diam: '1.20', base: 'Base Madera', color: '', veteado: '', brillo: '', baseMadera: '', qty: 1 });
+  const [editSaleRatonaForm, setEditSaleRatonaForm] = useState({ wood: '', w: '1.20', h: '0.60', qty: 1 });
+  const [editSaleOtroForm, setEditSaleOtroForm] = useState({ nombre: '', categoria: 'Otros', detalle: '', precio: '', costo: '', qty: 1 });
   const [fabList, setFabList] = useState<any[]>([]);
   const [fabSubTab, setFabSubTab] = useState<'lista' | 'diseñador'>('lista');
   const [fabStatusFilter, setFabStatusFilter] = useState<string>('Todos');
@@ -1008,10 +1072,21 @@ export default function App() {
     if (localSales) {
       try {
         loadedSales = JSON.parse(localSales);
-        setSales(loadedSales);
+        if (Array.isArray(loadedSales)) {
+          const hasVera = loadedSales.some(it => (it.client?.nombre || '').toLowerCase().includes('vera') || it.orderNum === 'PE-1005');
+          if (!hasVera) {
+            loadedSales = [JULIETA_VERA_ORDER, ...loadedSales];
+            localStorage.setItem('barda_sales_orders', JSON.stringify(loadedSales));
+          }
+          setSales(loadedSales);
+        }
       } catch (e) {
         console.warn('Failed to parse sales orders', e);
       }
+    } else {
+      loadedSales = [JULIETA_VERA_ORDER];
+      setSales(loadedSales);
+      localStorage.setItem('barda_sales_orders', JSON.stringify(loadedSales));
     }
 
     const localFixedCosts = localStorage.getItem('barda_fixed_costs');
@@ -1122,6 +1197,33 @@ export default function App() {
       }
     }
 
+    const localStock = localStorage.getItem('barda_stock_items');
+    if (localStock) {
+      try {
+        setStockList(JSON.parse(localStock));
+      } catch (e) {
+        console.warn('Failed to parse stock items', e);
+      }
+    } else {
+      const defaultStock: StockItem[] = [
+        { id: 'stk-1', name: 'Silla Escandinava', category: 'Sillas', detail: 'Madera Petiribí · Tapizado Pana Gris', qty: 8, costUnit: 45000, priceSuggested: 92000, minAlertQty: 2, createdAt: new Date().toISOString() },
+        { id: 'stk-2', name: 'Silla Windsor', category: 'Sillas', detail: 'Madera Paraíso Natural', qty: 4, costUnit: 38000, priceSuggested: 79000, minAlertQty: 2, createdAt: new Date().toISOString() },
+        { id: 'stk-3', name: 'Mesa Ratona Petiribí', category: 'Ratonas', detail: '1.20m x 0.60m Maciza con cantos rectos', qty: 2, costUnit: 120000, priceSuggested: 245000, minAlertQty: 1, createdAt: new Date().toISOString() },
+        { id: 'stk-4', name: 'Banqueta Alta Island', category: 'Banquetas', detail: 'Altura 75cm · Asiento Tapizado Cuero Negro', qty: 6, costUnit: 42000, priceSuggested: 85000, minAlertQty: 2, createdAt: new Date().toISOString() }
+      ];
+      setStockList(defaultStock);
+      localStorage.setItem('barda_stock_items', JSON.stringify(defaultStock));
+    }
+
+    const localMovements = localStorage.getItem('barda_stock_movements');
+    if (localMovements) {
+      try {
+        setStockMovements(JSON.parse(localMovements));
+      } catch (e) {
+        console.warn('Failed to parse stock movements', e);
+      }
+    }
+
     fetchCatalog();
   }, []);
 
@@ -1129,10 +1231,10 @@ export default function App() {
   useEffect(() => {
     if (currentUser) {
       const currentTab = activeTab === 'usuarios' ? 'usuarios' : (activeTab as keyof UserPermissions);
-      const perm = currentUser.permissions[currentTab];
-      if (!perm || !perm.view) {
-        const sections: Array<keyof UserPermissions> = ['presupuestos', 'ventas', 'remitos', 'fabricacion', 'finanzas', 'resumen', 'usuarios'];
-        const firstAllowed = sections.find(sec => currentUser.permissions[sec]?.view);
+      const perm = currentUser.permissions?.[currentTab];
+      if (perm && perm.view === false) {
+        const sections: Array<keyof UserPermissions> = ['presupuestos', 'ventas', 'stock', 'remitos', 'fabricacion', 'finanzas', 'resumen', 'usuarios'];
+        const firstAllowed = sections.find(sec => currentUser.permissions?.[sec]?.view);
         if (firstAllowed) {
           setActiveTab(firstAllowed === 'usuarios' ? 'usuarios' : firstAllowed as any);
         }
@@ -1140,125 +1242,144 @@ export default function App() {
     }
   }, [currentUser, activeTab]);
 
-  // Load Barda collections from Firestore when an authenticated user logs in
+  // Real-time synchronization of all Barda collections from Firestore
   useEffect(() => {
     if (!currentUser) {
       isFirebaseLoaded.current = false;
       return;
     }
 
-    const loadFirestoreData = async () => {
-      try {
-        setConnStatus('connected');
-        
-        // 1. Load Sales Orders
-        const salesData = await fetchFirestoreCollection('barda_sales_orders');
-        if (salesData.length > 0) {
-          setSales(salesData);
-          localStorage.setItem('barda_sales_orders', JSON.stringify(salesData));
-        }
+    setConnStatus('connected');
+    isFirebaseLoaded.current = true;
 
-        // 2. Load Fixed Costs
-        const fixedCostsData = await fetchFirestoreCollection('barda_fixed_costs');
-        if (fixedCostsData.length > 0) {
-          setFixedCosts(fixedCostsData);
-          localStorage.setItem('barda_fixed_costs', JSON.stringify(fixedCostsData));
-        }
+    // Check if initial migration from local storage is needed (first-time initialization)
+    migrateAllLocalStorageToFirestore().catch(err => {
+      console.warn("Firestore migration check note:", err);
+    });
 
-        // 3. Load Payments Ledger
-        const ledgerData = await fetchFirestoreCollection('barda_payments_ledger');
-        if (ledgerData.length > 0) {
-          setPaymentsLedger(ledgerData);
-          localStorage.setItem('barda_payments_ledger', JSON.stringify(ledgerData));
-        }
-
-        // 4. Load Saved Quotes Log
-        const quotesData = await fetchFirestoreCollection('barda_quotes_log');
-        if (quotesData.length > 0) {
-          setQuotesLog(quotesData);
-          localStorage.setItem('barda_quotes_log', JSON.stringify(quotesData));
-        }
-
-        // 5. Load Fabrication List
-        const fabricationData = await fetchFirestoreCollection('barda_fabricacion_list');
-        if (fabricationData.length > 0) {
-          setFabList(fabricationData);
-          localStorage.setItem('barda_fabricacion_list', JSON.stringify(fabricationData));
-        }
-
-        // 6. Load Funnel Overrides
-        const funnelData = await fetchFirestoreCollection('barda_funnel_overrides');
-        if (funnelData.length > 0) {
-          const funnelMap: any = {};
-          funnelData.forEach(item => {
-            const { id, ...rest } = item;
-            funnelMap[id] = rest;
-          });
-          setFunnelOverrides(funnelMap);
-          localStorage.setItem('barda_funnel_overrides', JSON.stringify(funnelMap));
-        }
-
-        isFirebaseLoaded.current = true;
-        console.log("All Barda Firestore collections successfully loaded and synced.");
-      } catch (err) {
-        console.warn("Failed to load from Firestore, using offline storage cache:", err);
-        setConnStatus('cached');
-        // Mark as loaded so any new operations can still trigger writes
-        isFirebaseLoaded.current = true;
+    // 1. Real-time subscription: Sales Orders
+    const unsubSales = subscribeToFirestoreCollection('barda_sales_orders', (salesData) => {
+      if (salesData) {
+        setSales(salesData);
+        localStorage.setItem('barda_sales_orders', JSON.stringify(salesData));
       }
+    });
+
+    // 2. Real-time subscription: Fixed & Variable Costs
+    const unsubCosts = subscribeToFirestoreCollection('barda_fixed_costs', (costsData) => {
+      if (costsData) {
+        setFixedCosts(costsData);
+        localStorage.setItem('barda_fixed_costs', JSON.stringify(costsData));
+      }
+    });
+
+    // 3. Real-time subscription: Payments Ledger
+    const unsubLedger = subscribeToFirestoreCollection('barda_payments_ledger', (ledgerData) => {
+      if (ledgerData) {
+        setPaymentsLedger(ledgerData);
+        localStorage.setItem('barda_payments_ledger', JSON.stringify(ledgerData));
+      }
+    });
+
+    // 4. Real-time subscription: Saved Quotes Log
+    const unsubQuotes = subscribeToFirestoreCollection('barda_quotes_log', (quotesData) => {
+      if (quotesData) {
+        setQuotesLog(quotesData);
+        localStorage.setItem('barda_quotes_log', JSON.stringify(quotesData));
+      }
+    });
+
+    // 5. Real-time subscription: Fabrication Orders
+    const unsubFab = subscribeToFirestoreCollection('barda_fabricacion_list', (fabricationData) => {
+      if (fabricationData) {
+        setFabList(fabricationData);
+        localStorage.setItem('barda_fabricacion_list', JSON.stringify(fabricationData));
+      }
+    });
+
+    // 5.1 Real-time subscription: Stock Items
+    const unsubStock = subscribeToFirestoreCollection('barda_stock_items', (stockData) => {
+      if (stockData) {
+        setStockList(stockData);
+        localStorage.setItem('barda_stock_items', JSON.stringify(stockData));
+      }
+    });
+
+    // 5.2 Real-time subscription: Stock Movements
+    const unsubStockMov = subscribeToFirestoreCollection('barda_stock_movements', (movData) => {
+      if (movData) {
+        setStockMovements(movData);
+        localStorage.setItem('barda_stock_movements', JSON.stringify(movData));
+      }
+    });
+
+    // 6. Real-time subscription: Commercial Funnel Overrides
+    const unsubFunnel = subscribeToFirestoreCollection('barda_funnel_overrides', (funnelData) => {
+      if (funnelData) {
+        const funnelMap: any = {};
+        funnelData.forEach(item => {
+          const { id, ...rest } = item;
+          funnelMap[id] = rest;
+        });
+        setFunnelOverrides(funnelMap);
+        localStorage.setItem('barda_funnel_overrides', JSON.stringify(funnelMap));
+      }
+    });
+
+    // 7. Real-time subscription: App Configuration (e.g. Company Logo)
+    const unsubConfig = subscribeToFirestoreCollection('barda_app_config', (configData) => {
+      if (configData) {
+        const logoConfig = configData.find(c => c.id === 'company_logo');
+        if (logoConfig?.customLogoUrl) {
+          localStorage.setItem('barda_custom_logo', logoConfig.customLogoUrl);
+          window.dispatchEvent(new Event('storage'));
+        }
+      }
+    });
+
+    // Background auto-refresh polling every 10 seconds to ensure seamless live sync across all devices
+    const syncInterval = setInterval(async () => {
+      try {
+        const freshSales = await fetchFirestoreCollection('barda_sales_orders');
+        if (freshSales && freshSales.length > 0) {
+          setSales(freshSales);
+          localStorage.setItem('barda_sales_orders', JSON.stringify(freshSales));
+        }
+      } catch (err) {
+        // quiet polling fallback
+      }
+    }, 10000);
+
+    // Auto sync when user switches tabs or refocuses the app window
+    const handleFocus = async () => {
+      try {
+        await migrateAllLocalStorageToFirestore();
+        const freshSales = await fetchFirestoreCollection('barda_sales_orders');
+        if (freshSales && freshSales.length > 0) {
+          setSales(freshSales);
+          localStorage.setItem('barda_sales_orders', JSON.stringify(freshSales));
+        }
+      } catch {}
     };
 
-    loadFirestoreData();
-  }, [currentUser]);
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleFocus);
 
-  // Synchronize state changes to Firestore & local storage
-  useEffect(() => {
-    localStorage.setItem('barda_sales_orders', JSON.stringify(sales));
-    if (currentUser && isFirebaseLoaded.current && connStatus === 'connected') {
-      saveCollectionBatch('barda_sales_orders', sales);
-    }
-  }, [sales, currentUser, connStatus]);
-
-  useEffect(() => {
-    localStorage.setItem('barda_fixed_costs', JSON.stringify(fixedCosts));
-    if (currentUser && isFirebaseLoaded.current && connStatus === 'connected') {
-      saveCollectionBatch('barda_fixed_costs', fixedCosts);
-    }
-  }, [fixedCosts, currentUser, connStatus]);
-
-  useEffect(() => {
-    localStorage.setItem('barda_payments_ledger', JSON.stringify(paymentsLedger));
-    if (currentUser && isFirebaseLoaded.current && connStatus === 'connected') {
-      saveCollectionBatch('barda_payments_ledger', paymentsLedger);
-    }
-  }, [paymentsLedger, currentUser, connStatus]);
-
-  useEffect(() => {
-    localStorage.setItem('barda_quotes_log', JSON.stringify(quotesLog));
-    if (currentUser && isFirebaseLoaded.current && connStatus === 'connected') {
-      saveCollectionBatch('barda_quotes_log', quotesLog);
-    }
-  }, [quotesLog, currentUser, connStatus]);
-
-  // Save Fabrication list on changes
-  useEffect(() => {
-    localStorage.setItem('barda_fabricacion_list', JSON.stringify(fabList));
-    if (currentUser && isFirebaseLoaded.current && connStatus === 'connected') {
-      saveCollectionBatch('barda_fabricacion_list', fabList);
-    }
-  }, [fabList, currentUser, connStatus]);
-
-  // Save Funnel Overrides on changes
-  useEffect(() => {
-    localStorage.setItem('barda_funnel_overrides', JSON.stringify(funnelOverrides));
-    if (currentUser && isFirebaseLoaded.current && connStatus === 'connected') {
-      const funnelList = Object.entries(funnelOverrides).map(([key, val]: [string, any]) => ({
-        id: key,
-        ...val
-      }));
-      saveCollectionBatch('barda_funnel_overrides', funnelList);
-    }
-  }, [funnelOverrides, currentUser, connStatus]);
+    return () => {
+      clearInterval(syncInterval);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleFocus);
+      unsubSales();
+      unsubCosts();
+      unsubLedger();
+      unsubQuotes();
+      unsubFab();
+      unsubStock();
+      unsubStockMov();
+      unsubFunnel();
+      unsubConfig();
+    };
+  }, [currentUser, firebaseAuthUser]);
 
   // Load existing funnel data when selected month/year changes
   useEffect(() => {
@@ -1294,13 +1415,19 @@ export default function App() {
 
   const handleSaveFunnelRegistry = () => {
     const key = `${funnelRegYear}-${funnelRegMonth}`;
-    setFunnelOverrides(prev => ({
-      ...prev,
-      [key]: {
-        phones: funnelRegPhones,
-        visits: funnelRegVisits
-      }
-    }));
+    const newEntry = {
+      phones: funnelRegPhones,
+      visits: funnelRegVisits
+    };
+    setFunnelOverrides(prev => {
+      const updated = {
+        ...prev,
+        [key]: newEntry
+      };
+      localStorage.setItem('barda_funnel_overrides', JSON.stringify(updated));
+      return updated;
+    });
+    saveFirestoreDocument('barda_funnel_overrides', key, { id: key, key, ...newEntry });
     setFunnelSaveSuccess(true);
     setTimeout(() => setFunnelSaveSuccess(false), 2000);
   };
@@ -2028,13 +2155,25 @@ export default function App() {
     const updated = [newLog, ...quotesLog];
     setQuotesLog(updated);
     localStorage.setItem('barda_quotes_log', JSON.stringify(updated));
+    saveFirestoreDocument('barda_quotes_log', String(newLog.id), newLog);
     alert('¡Presupuesto Guardado con éxito en el Registro de Presupuestos!');
   };
 
   const handleUpdateQuoteStatus = (id: number, newStatus: QuoteLogItem['status']) => {
-    const updated = quotesLog.map(q => q.id === id ? { ...q, status: newStatus } : q);
+    let updatedQuoteObj: any = null;
+    const updated = quotesLog.map(q => {
+      if (q.id === id) {
+        const next = { ...q, status: newStatus };
+        updatedQuoteObj = next;
+        return next;
+      }
+      return q;
+    });
     setQuotesLog(updated);
     localStorage.setItem('barda_quotes_log', JSON.stringify(updated));
+    if (updatedQuoteObj) {
+      saveFirestoreDocument('barda_quotes_log', String(id), updatedQuoteObj);
+    }
   };
 
   const handleDeleteQuote = (id: number) => {
@@ -2042,6 +2181,7 @@ export default function App() {
     const updated = quotesLog.filter(q => q.id !== id);
     setQuotesLog(updated);
     localStorage.setItem('barda_quotes_log', JSON.stringify(updated));
+    deleteFirestoreDocument('barda_quotes_log', String(id));
   };
 
   const handleLoadQuoteToCotizador = (quote: QuoteLogItem) => {
@@ -2084,9 +2224,20 @@ export default function App() {
       setBudgetDate(quote.date);
     }
 
-    const updated = quotesLog.map(q => q.id === quote.id ? { ...q, status: 'Venta' as const } : q);
+    let updatedQuoteObj: any = null;
+    const updated = quotesLog.map(q => {
+      if (q.id === quote.id) {
+        const next = { ...q, status: 'Venta' as const };
+        updatedQuoteObj = next;
+        return next;
+      }
+      return q;
+    });
     setQuotesLog(updated);
     localStorage.setItem('barda_quotes_log', JSON.stringify(updated));
+    if (updatedQuoteObj) {
+      saveFirestoreDocument('barda_quotes_log', String(quote.id), updatedQuoteObj);
+    }
 
     setPresupuestosSubTab('nuevo');
     setTimeout(() => {
@@ -2108,6 +2259,7 @@ export default function App() {
     const updated = [newLog, ...quotesLog];
     setQuotesLog(updated);
     localStorage.setItem('barda_quotes_log', JSON.stringify(updated));
+    saveFirestoreDocument('barda_quotes_log', String(newLog.id), newLog);
     window.print();
   };
 
@@ -2195,6 +2347,7 @@ export default function App() {
     const updatedSales = [newOrder, ...sales];
     setSales(updatedSales);
     localStorage.setItem('barda_sales_orders', JSON.stringify(updatedSales));
+    saveFirestoreDocument('barda_sales_orders', String(newOrder.id), newOrder);
 
     // Sync to paymentsLedger
     const defaultAccount = newOrder.paymentMethod?.toLowerCase().includes('cuotas') 
@@ -2205,7 +2358,7 @@ export default function App() {
     
     const newPayments = [...paymentsLedger];
     if (senaVal > 0) {
-      newPayments.push({
+      const senaPayment = {
         id: `sena-${newOrder.id}-${Date.now()}`,
         orderId: newOrder.id,
         orderNum: newOrder.orderNum,
@@ -2215,12 +2368,14 @@ export default function App() {
         type: 'Seña',
         account: defaultAccount,
         paymentMethod: newOrder.paymentMethod
-      });
+      };
+      newPayments.push(senaPayment);
+      saveFirestoreDocument('barda_payments_ledger', String(senaPayment.id), senaPayment);
     }
     if (newOrder.paymentStatus === 'Pagado') {
       const balanceVal = actualTotal - senaVal;
       if (balanceVal > 0) {
-        newPayments.push({
+        const balancePayment = {
           id: `balance-${newOrder.id}-${Date.now()}`,
           orderId: newOrder.id,
           orderNum: newOrder.orderNum,
@@ -2230,35 +2385,87 @@ export default function App() {
           type: 'Saldo',
           account: defaultAccount,
           paymentMethod: newOrder.paymentMethod
-        });
+        };
+        newPayments.push(balancePayment);
+        saveFirestoreDocument('barda_payments_ledger', String(balancePayment.id), balancePayment);
       }
     }
     setPaymentsLedger(newPayments);
     localStorage.setItem('barda_payments_ledger', JSON.stringify(newPayments));
 
-    // Also automatically generate and save a manufacturing order in fabList
-    const autoFabOrder = {
-      id: Date.now() + 1,
-      orderNum,
-      date: budgetDate || new Date().toISOString().split('T')[0],
-      client: { ...cliente },
-      deliveryDate: calcDeliveryDate(),
-      notes: orderForm.notes || '',
-      items: quoteItems.map(it => ({
-        id: it.id + Math.random(),
-        name: it.name,
-        detail: it.detail || '',
-        cost: getUnitCost(it),
-        qty: it.qty,
-        category: it.category
-      })),
-      status: 'Pendiente',
-      totalCost: totalCostValue,
-      attachments: orderForm.attachments || []
-    };
-    const updatedFabList = [autoFabOrder, ...fabList];
-    setFabList(updatedFabList);
-    localStorage.setItem('barda_fabricacion_list', JSON.stringify(updatedFabList));
+    // Check if items are sold from stock vs require manufacturing
+    const fabItems = quoteItems.filter(it => !it.fromStock);
+    const stockItemsToDeduct = quoteItems.filter(it => it.fromStock);
+
+    // Deduct stock if any
+    if (stockItemsToDeduct.length > 0) {
+      let currentStock = [...stockList];
+      let newMovements = [...stockMovements];
+      const nowIso = new Date().toISOString();
+      const currentDate = nowIso.split('T')[0];
+
+      stockItemsToDeduct.forEach(it => {
+        // Find matching stock item by stockItemId or name
+        const matchIdx = currentStock.findIndex(stk => (it.stockItemId && stk.id === it.stockItemId) || stk.name.toLowerCase() === it.name.toLowerCase());
+        if (matchIdx !== -1) {
+          const matched = currentStock[matchIdx];
+          const newQty = Math.max(0, matched.qty - it.qty);
+          const updatedStk = { ...matched, qty: newQty, updatedAt: nowIso };
+          currentStock[matchIdx] = updatedStk;
+          saveFirestoreDocument('barda_stock_items', updatedStk).catch(console.error);
+
+          const mov: StockMovement = {
+            id: `mov-sale-${Date.now()}-${Math.random()}`,
+            itemId: matched.id,
+            itemName: matched.name,
+            type: 'OUT_VENTA',
+            qty: it.qty,
+            unitCost: matched.costUnit,
+            totalCost: it.qty * matched.costUnit,
+            relatedOrderId: newOrder.id,
+            relatedOrderNum: newOrder.orderNum,
+            date: currentDate,
+            notes: `Salida de stock por venta a ${newOrder.client?.nombre || 'Cliente'} (Pedido ${newOrder.orderNum})`,
+            createdAt: nowIso
+          };
+          newMovements.unshift(mov);
+          saveFirestoreDocument('barda_stock_movements', mov).catch(console.error);
+        }
+      });
+
+      setStockList(currentStock);
+      localStorage.setItem('barda_stock_items', JSON.stringify(currentStock));
+      setStockMovements(newMovements);
+      localStorage.setItem('barda_stock_movements', JSON.stringify(newMovements));
+    }
+
+    // Only generate manufacturing order if there are items to manufacture
+    if (fabItems.length > 0) {
+      const fabTotalCost = fabItems.reduce((acc, it) => acc + (getUnitCost(it) * it.qty), 0);
+      const autoFabOrder = {
+        id: Date.now() + 1,
+        orderNum,
+        date: budgetDate || new Date().toISOString().split('T')[0],
+        client: { ...cliente },
+        deliveryDate: calcDeliveryDate(),
+        notes: orderForm.notes || '',
+        items: fabItems.map(it => ({
+          id: it.id + Math.random(),
+          name: it.name,
+          detail: it.detail || '',
+          cost: getUnitCost(it),
+          qty: it.qty,
+          category: it.category
+        })),
+        status: 'Pendiente',
+        totalCost: fabTotalCost,
+        attachments: orderForm.attachments || []
+      };
+      const updatedFabList = [autoFabOrder, ...fabList];
+      setFabList(updatedFabList);
+      localStorage.setItem('barda_fabricacion_list', JSON.stringify(updatedFabList));
+      saveFirestoreDocument('barda_fabricacion_list', String(autoFabOrder.id), autoFabOrder);
+    }
 
     // Clear active budget
     setQuoteItems([]);
@@ -2277,6 +2484,7 @@ export default function App() {
   const updateOrderStatus = (id: number | string, field: 'status' | 'paymentStatus', val: string) => {
     let balanceCollected = 0;
     let orderToUpdate: any = null;
+    let updatedOrderObj: any = null;
 
     const updated = sales.map(s => {
       if (String(s.id) === String(id)) {
@@ -2289,6 +2497,7 @@ export default function App() {
             balanceCollected = s.total - (s.senaAmount || 0);
           }
         }
+        updatedOrderObj = next;
         return next;
       }
       return s;
@@ -2296,6 +2505,9 @@ export default function App() {
 
     setSales(updated);
     localStorage.setItem('barda_sales_orders', JSON.stringify(updated));
+    if (updatedOrderObj) {
+      saveFirestoreDocument('barda_sales_orders', String(id), updatedOrderObj);
+    }
 
     if (balanceCollected > 0 && orderToUpdate) {
       const defaultAccount = orderToUpdate.paymentMethod?.toLowerCase().includes('cuotas') 
@@ -2318,29 +2530,170 @@ export default function App() {
       const updatedLedger = [...paymentsLedger, newPayment];
       setPaymentsLedger(updatedLedger);
       localStorage.setItem('barda_payments_ledger', JSON.stringify(updatedLedger));
+      saveFirestoreDocument('barda_payments_ledger', String(newPayment.id), newPayment);
     }
   };
 
-  const deleteOrder = (id: number | string) => {
+  const deleteOrder = async (id: number | string) => {
     if (!confirm('¿Está seguro de que desea eliminar esta orden de pedido y toda su información vinculada (taller, cobros)?')) return;
     const orderToDelete = sales.find(s => String(s.id) === String(id));
 
-    // 1. Delete from sales list
+    // 1. Delete from sales list in Firestore & local state
     const updatedSales = sales.filter(s => String(s.id) !== String(id));
     setSales(updatedSales);
     localStorage.setItem('barda_sales_orders', JSON.stringify(updatedSales));
+    await deleteFirestoreDocument('barda_sales_orders', String(id));
 
     if (orderToDelete) {
-      // 2. Delete from fabrication list (fabList)
+      // 2. Delete from fabrication list (fabList) in Firestore & local state
+      const fabItemsToDelete = fabList.filter(f => f.orderNum === orderToDelete.orderNum || String(f.id) === String(orderToDelete.id));
+      for (const f of fabItemsToDelete) {
+        await deleteFirestoreDocument('barda_fabricacion_list', String(f.id));
+      }
       const updatedFabList = fabList.filter(f => f.orderNum !== orderToDelete.orderNum && String(f.id) !== String(orderToDelete.id));
       setFabList(updatedFabList);
       localStorage.setItem('barda_fabricacion_list', JSON.stringify(updatedFabList));
 
-      // 3. Delete from payments ledger (paymentsLedger)
+      // 3. Delete from payments ledger (paymentsLedger) in Firestore & local state
+      const ledgerToDelete = paymentsLedger.filter(p => String(p.orderId) === String(orderToDelete.id) || p.orderNum === orderToDelete.orderNum);
+      for (const p of ledgerToDelete) {
+        await deleteFirestoreDocument('barda_payments_ledger', String(p.id));
+      }
       const updatedLedger = paymentsLedger.filter(p => String(p.orderId) !== String(orderToDelete.id) && p.orderNum !== orderToDelete.orderNum);
       setPaymentsLedger(updatedLedger);
       localStorage.setItem('barda_payments_ledger', JSON.stringify(updatedLedger));
+
+      // 4. Delete funnel overrides if present
+      await deleteFirestoreDocument('barda_funnel_overrides', String(orderToDelete.id));
+      await deleteFirestoreDocument('barda_funnel_overrides', String(orderToDelete.orderNum));
     }
+  };
+
+
+  // ==========================================
+  // STOCK MANAGEMENT HANDLERS
+  // ==========================================
+  const handleAddStockItem = (
+    itemData: Omit<StockItem, 'id' | 'createdAt' | 'updatedAt'>,
+    paymentAccount?: string
+  ) => {
+    const newItemId = `stk-${Date.now()}`;
+    const nowIso = new Date().toISOString();
+    const currentDate = nowIso.split('T')[0];
+
+    const newItem: StockItem = {
+      ...itemData,
+      id: newItemId,
+      createdAt: nowIso,
+      updatedAt: nowIso
+    };
+
+    const updatedStock = [newItem, ...stockList];
+    setStockList(updatedStock);
+    localStorage.setItem('barda_stock_items', JSON.stringify(updatedStock));
+    saveFirestoreDocument('barda_stock_items', newItem).catch(console.error);
+
+    // Register movement
+    const totalCost = (Number(itemData.qty) || 0) * (Number(itemData.costUnit) || 0);
+    const newMovement: StockMovement = {
+      id: `mov-${Date.now()}`,
+      itemId: newItemId,
+      itemName: itemData.name,
+      type: 'IN_COMPRA',
+      qty: itemData.qty,
+      unitCost: itemData.costUnit,
+      totalCost,
+      account: paymentAccount,
+      date: currentDate,
+      notes: paymentAccount ? `Ingreso a stock con egreso de tesorería (${paymentAccount})` : 'Ingreso inicial a stock',
+      createdAt: nowIso
+    };
+
+    const updatedMovements = [newMovement, ...stockMovements];
+    setStockMovements(updatedMovements);
+    localStorage.setItem('barda_stock_movements', JSON.stringify(updatedMovements));
+    saveFirestoreDocument('barda_stock_movements', newMovement).catch(console.error);
+
+    // If payment account is provided, register Treasury expense (Inversión en Stock)
+    if (paymentAccount && totalCost > 0) {
+      const stockPayment = {
+        id: `stock-pay-${Date.now()}`,
+        orderId: 0,
+        orderNum: 'STOCK-INV',
+        clientName: 'Inversión en Stock / Mercadería',
+        type: 'Gasto',
+        amount: -Math.abs(totalCost),
+        date: currentDate,
+        account: paymentAccount,
+        currency: 'ARS',
+        iva: '0',
+        pendingPayment: false,
+        note: `Compra de ${itemData.qty}u de ${itemData.name} para stock`,
+        category: 'Inversión en Stock'
+      };
+      const updatedLedger = [stockPayment, ...paymentsLedger];
+      setPaymentsLedger(updatedLedger);
+      localStorage.setItem('barda_payments_ledger', JSON.stringify(updatedLedger));
+      saveFirestoreDocument('barda_payments_ledger', stockPayment).catch(console.error);
+    }
+  };
+
+  const handleUpdateStockItem = (id: string, updates: Partial<StockItem>) => {
+    const updated = stockList.map(item => {
+      if (item.id === id) {
+        const updatedItem = { ...item, ...updates, updatedAt: new Date().toISOString() };
+        saveFirestoreDocument('barda_stock_items', updatedItem).catch(console.error);
+        return updatedItem;
+      }
+      return item;
+    });
+    setStockList(updated);
+    localStorage.setItem('barda_stock_items', JSON.stringify(updated));
+  };
+
+  const handleDeleteStockItem = (id: string) => {
+    const updated = stockList.filter(item => item.id !== id);
+    setStockList(updated);
+    localStorage.setItem('barda_stock_items', JSON.stringify(updated));
+    deleteFirestoreDocument('barda_stock_items', id).catch(console.error);
+  };
+
+  const handleAdjustStockQty = (id: string, newQty: number, notes?: string) => {
+    const targetItem = stockList.find(it => it.id === id);
+    if (!targetItem) return;
+
+    const diff = newQty - targetItem.qty;
+    const nowIso = new Date().toISOString();
+    const currentDate = nowIso.split('T')[0];
+
+    const updated = stockList.map(item => {
+      if (item.id === id) {
+        const updatedItem = { ...item, qty: newQty, updatedAt: nowIso };
+        saveFirestoreDocument('barda_stock_items', updatedItem).catch(console.error);
+        return updatedItem;
+      }
+      return item;
+    });
+    setStockList(updated);
+    localStorage.setItem('barda_stock_items', JSON.stringify(updated));
+
+    // Register adjustment movement
+    const newMovement: StockMovement = {
+      id: `mov-${Date.now()}`,
+      itemId: id,
+      itemName: targetItem.name,
+      type: 'AJUSTE',
+      qty: Math.abs(diff),
+      unitCost: targetItem.costUnit,
+      totalCost: Math.abs(diff) * targetItem.costUnit,
+      date: currentDate,
+      notes: notes || `Ajuste manual de stock (${diff >= 0 ? '+' : ''}${diff} u.)`,
+      createdAt: nowIso
+    };
+    const updatedMovements = [newMovement, ...stockMovements];
+    setStockMovements(updatedMovements);
+    localStorage.setItem('barda_stock_movements', JSON.stringify(updatedMovements));
+    saveFirestoreDocument('barda_stock_movements', newMovement).catch(console.error);
   };
 
   const handleAddItemToEditingSale = () => {
@@ -2378,27 +2731,182 @@ export default function App() {
     });
   };
 
+  const handleAddCatalogItemToEditingSale = () => {
+    if (!editingSale) return;
+
+    let name = '';
+    let category = 'Otros';
+    let detail = '';
+    let unitPrice = 0;
+    let cost = 0;
+    let qty = 1;
+
+    if (editSaleCategory === 'sillas') {
+      const f = editSaleSillaForm;
+      const model = f.model || catalog.chairs[0]?.name || 'Silla Escandinava';
+      const wood = f.wood || 'PETIRIBI';
+      const fabric = f.fabric || 'Lienzo';
+      const product = catalog.chairs.find(c => c.name === model);
+      unitPrice = product?.prices?.[wood]?.[fabric] || 0;
+      
+      const costProduct = costsCatalog.chairs?.find((c: any) => c.name?.toUpperCase() === model?.toUpperCase());
+      const rawCost = costProduct?.prices?.[wood]?.[fabric];
+      cost = rawCost || calculateDefaultCost(unitPrice);
+
+      name = model;
+      category = 'Sillas';
+      detail = `${titleCase(wood)} · ${fabric}${f.color ? ` · Color: ${f.color}` : ''}`;
+      qty = Math.max(1, Number(f.qty) || 1);
+    } else if (editSaleCategory === 'mesas') {
+      const f = editSaleMesaForm;
+      const wood = f.wood || catalog.tables[0]?.name || 'Mesa Comedor Maciza';
+      const wn = parseFloat(String(f.w).replace(',', '.')) || 1.8;
+      const hn = parseFloat(String(f.h).replace(',', '.')) || 0.9;
+      const m2 = wn * hn;
+      const minM2 = 1.6;
+      const billableM2 = m2 < minM2 ? minM2 : m2;
+      const product = catalog.tables.find(t => t.name === wood);
+      unitPrice = product ? Math.round(product.pricePerM2 * billableM2) : 0;
+
+      const costProduct = costsCatalog.tables?.find((t: any) => t.name?.toLowerCase() === wood?.toLowerCase());
+      const costPerM2 = costProduct?.pricePerM2;
+      cost = costPerM2 ? Math.round(costPerM2 * billableM2) : calculateDefaultCost(unitPrice);
+
+      name = `Mesa ${wood}`;
+      category = 'Mesas';
+      detail = `${wn}m × ${hn}m = ${m2.toFixed(2)}m² · Base: ${f.base}${m2 < minM2 ? ' (Mín. 1.6m² facturado)' : ''}`;
+      if (wood === 'Microcemento' && f.color) {
+        detail += ` · Color: ${f.color} · Vet: ${f.veteado || '-'} · Brillo: ${f.brillo || '-'}`;
+        if (f.baseMadera) detail += ` · Base Madera: ${f.baseMadera}`;
+      }
+      qty = Math.max(1, Number(f.qty) || 1);
+    } else if (editSaleCategory === 'circular') {
+      const f = editSaleCircularForm;
+      const wood = f.wood || catalog.circular[0]?.name || 'Mesa Redonda Petiribí';
+      const diam = parseFloat(String(f.diam).replace(',', '.')) || 1.2;
+      const product = catalog.circular.find(t => t.name === wood);
+      unitPrice = product ? Math.round(product.pricePerM2 * diam) : 0;
+
+      const costProduct = costsCatalog.circular?.find((t: any) => t.name?.toLowerCase() === wood?.toLowerCase());
+      const costPerM2 = costProduct?.pricePerM2;
+      cost = costPerM2 ? Math.round(costPerM2 * diam) : calculateDefaultCost(unitPrice);
+
+      name = `Mesa Circular ${wood}`;
+      category = 'Mesas Circulares';
+      detail = `Diámetro: ${diam}m · Base: ${f.base}`;
+      if (wood === 'Microcemento' && f.color) {
+        detail += ` · Color: ${f.color} · Vet: ${f.veteado || '-'} · Brillo: ${f.brillo || '-'}`;
+        if (f.baseMadera) detail += ` · Base Madera: ${f.baseMadera}`;
+      }
+      qty = Math.max(1, Number(f.qty) || 1);
+    } else if (editSaleCategory === 'ratonas') {
+      const f = editSaleRatonaForm;
+      const wood = f.wood || catalog.ratonas[0]?.name || 'Mesa Ratona Petiribí';
+      const wn = parseFloat(String(f.w).replace(',', '.')) || 1.2;
+      const hn = parseFloat(String(f.h).replace(',', '.')) || 0.6;
+      const m2 = wn * hn;
+      const minM2 = 1.4;
+      const billableM2 = m2 < minM2 ? minM2 : m2;
+      const product = catalog.ratonas.find(r => r.name === wood);
+      unitPrice = product ? Math.round(product.pricePerM2 * billableM2) : 0;
+
+      const costProduct = costsCatalog.ratonas?.find((t: any) => t.name?.toLowerCase() === wood?.toLowerCase());
+      const costPerM2 = costProduct?.pricePerM2;
+      cost = costPerM2 ? Math.round(costPerM2 * billableM2) : calculateDefaultCost(unitPrice);
+
+      name = `Mesa Ratona ${wood}`;
+      category = 'Ratonas';
+      detail = `${wn}m × ${hn}m = ${m2.toFixed(2)}m²${m2 < minM2 ? ' (Mín. 1.4m² facturado)' : ''}`;
+      qty = Math.max(1, Number(f.qty) || 1);
+    } else {
+      const f = editSaleOtroForm;
+      name = f.nombre.trim() || 'Producto Personalizado';
+      category = f.categoria || 'Otros';
+      detail = f.detalle.trim();
+      const p = parseFloat(String(f.precio).replace(/\./g, '').replace(',', '.')) || 0;
+      unitPrice = p;
+      const c = f.costo ? (parseFloat(String(f.costo).replace(/\./g, '').replace(',', '.')) || 0) : calculateDefaultCost(unitPrice);
+      cost = c;
+      qty = Math.max(1, Number(f.qty) || 1);
+    }
+
+    const newItem = {
+      id: Date.now() + Math.random(),
+      name,
+      nombre: name,
+      category,
+      cat: category,
+      detail,
+      medidas: detail,
+      qty,
+      cant: qty,
+      quantity: qty,
+      unitPrice,
+      precioUnitario: unitPrice,
+      cost,
+      costoUnitario: cost,
+      costo: cost,
+      totalPrice: unitPrice * qty,
+      precioTotal: unitPrice * qty,
+      subtotal: unitPrice * qty,
+      costoTotal: cost * qty
+    };
+
+    const updatedItems = [...(editingSale.items || []), newItem];
+    const newTotal = updatedItems.reduce((sum: number, it: any) => sum + (Number(it.totalPrice || (it.unitPrice * (it.qty || 1))) || 0), 0);
+    const newCost = updatedItems.reduce((sum: number, it: any) => sum + (Number(it.costoTotal || (it.cost * (it.qty || 1))) || 0), 0);
+
+    setEditingSale({
+      ...editingSale,
+      items: updatedItems,
+      total: newTotal,
+      totalCost: newCost
+    });
+
+    setShowEditSaleCatalogPicker(false);
+  };
+
   const handleUpdateEditingSaleItem = (idx: number, field: string, val: any) => {
     if (!editingSale) return;
     const updatedItems = (editingSale.items || []).map((it: any, i: number) => {
       if (i !== idx) return it;
       const updated = { ...it, [field]: val };
-      if (field === 'qty' || field === 'cant') {
-        const q = Math.max(1, parseInt(val, 10) || 1);
-        updated.qty = q;
-        updated.cant = q;
-        updated.quantity = q;
+      if (field === 'qty' || field === 'cant' || field === 'quantity') {
+        if (val === '') {
+          updated.qty = '';
+          updated.cant = '';
+          updated.quantity = '';
+        } else {
+          const q = parseInt(val, 10);
+          const validQ = !isNaN(q) ? Math.max(1, q) : 1;
+          updated.qty = validQ;
+          updated.cant = validQ;
+          updated.quantity = validQ;
+        }
       }
       if (field === 'unitPrice' || field === 'precioUnitario') {
-        const p = Math.max(0, parseFloat(val) || 0);
-        updated.unitPrice = p;
-        updated.precioUnitario = p;
+        if (val === '') {
+          updated.unitPrice = '';
+          updated.precioUnitario = '';
+        } else {
+          const p = parseFloat(val);
+          const validP = !isNaN(p) ? Math.max(0, p) : 0;
+          updated.unitPrice = validP;
+          updated.precioUnitario = validP;
+        }
       }
       if (field === 'cost' || field === 'costoUnitario' || field === 'costo') {
-        const c = Math.max(0, parseFloat(val) || 0);
-        updated.cost = c;
-        updated.costoUnitario = c;
-        updated.costo = c;
+        if (val === '') {
+          updated.cost = '';
+          updated.costoUnitario = '';
+          updated.costo = '';
+        } else {
+          const c = parseFloat(val);
+          const validC = !isNaN(c) ? Math.max(0, c) : 0;
+          updated.cost = validC;
+          updated.costoUnitario = validC;
+          updated.costo = validC;
+        }
       }
       if (field === 'name' || field === 'nombre') {
         updated.name = val;
@@ -2412,10 +2920,16 @@ export default function App() {
         updated.detail = val;
         updated.medidas = val;
       }
+      if (field === 'fromStock') {
+        updated.fromStock = Boolean(val);
+      }
+      if (field === 'stockItemId') {
+        updated.stockItemId = val;
+      }
 
-      const q = Number(updated.qty ?? updated.cant ?? 1) || 1;
-      const p = Number(updated.unitPrice ?? updated.precioUnitario ?? 0) || 0;
-      const c = Number(updated.cost ?? updated.costoUnitario ?? updated.costo ?? 0) || 0;
+      const q = Number(updated.qty || 1);
+      const p = Number(updated.unitPrice || 0);
+      const c = Number(updated.cost || 0);
       
       updated.totalPrice = p * q;
       updated.precioTotal = p * q;
@@ -2505,12 +3019,13 @@ export default function App() {
     const updatedSales = sales.map(s => s.id === updatedOrder.id ? updatedOrder : s);
     setSales(updatedSales);
     localStorage.setItem('barda_sales_orders', JSON.stringify(updatedSales));
+    saveFirestoreDocument('barda_sales_orders', String(updatedOrder.id), updatedOrder);
 
     // Sync with fabList if order exists there
     const fabIdx = fabList.findIndex(f => f.orderNum === updatedOrder.orderNum);
     if (fabIdx >= 0) {
       const updatedFabList = [...fabList];
-      updatedFabList[fabIdx] = {
+      const updatedFabItem = {
         ...updatedFabList[fabIdx],
         client: updatedOrder.client || updatedFabList[fabIdx].client,
         deliveryDate: updatedOrder.deliveryDate || updatedFabList[fabIdx].deliveryDate,
@@ -2519,8 +3034,10 @@ export default function App() {
         items: normalizedItems,
         attachments: updatedOrder.attachments ? [...updatedOrder.attachments] : []
       };
+      updatedFabList[fabIdx] = updatedFabItem;
       setFabList(updatedFabList);
       localStorage.setItem('barda_fabricacion_list', JSON.stringify(updatedFabList));
+      saveFirestoreDocument('barda_fabricacion_list', String(updatedFabItem.id), updatedFabItem);
     }
 
     setEditingSale(null);
@@ -2531,6 +3048,7 @@ export default function App() {
     const updated = fixedCosts.filter(c => c.id !== id);
     setFixedCosts(updated);
     localStorage.setItem('barda_fixed_costs', JSON.stringify(updated));
+    deleteFirestoreDocument('barda_fixed_costs', String(id));
   };
 
   const openEditMovement = (item: any) => {
@@ -2562,9 +3080,10 @@ export default function App() {
     const totalAmount = baseAmt * (1 + ivaPct / 100);
 
     if (editMovementForm.isFixedCost) {
+      let updatedCostObj: any = null;
       const updatedCosts = fixedCosts.map(c => {
         if (String(c.id) === String(editMovementForm.id)) {
-          return {
+          const updatedCost = {
             ...c,
             category: editMovementForm.category,
             description: editMovementForm.description,
@@ -2577,15 +3096,21 @@ export default function App() {
             pendingPayment: editMovementForm.pendingPayment,
             month: editMovementForm.date.substring(0, 7)
           };
+          updatedCostObj = updatedCost;
+          return updatedCost;
         }
         return c;
       });
       setFixedCosts(updatedCosts);
       localStorage.setItem('barda_fixed_costs', JSON.stringify(updatedCosts));
+      if (updatedCostObj) {
+        saveFirestoreDocument('barda_fixed_costs', String(editMovementForm.id), updatedCostObj);
+      }
     } else if (editMovementForm.isLedger) {
+      let updatedLedgerObj: any = null;
       const updatedLedger = paymentsLedger.map(p => {
         if (String(p.id) === String(editMovementForm.id)) {
-          return {
+          const updatedItem = {
             ...p,
             clientName: editMovementForm.clientName || editMovementForm.description,
             orderNum: editMovementForm.category || p.orderNum,
@@ -2599,11 +3124,16 @@ export default function App() {
             pendingPayment: editMovementForm.pendingPayment,
             note: editMovementForm.note || editMovementForm.description
           };
+          updatedLedgerObj = updatedItem;
+          return updatedItem;
         }
         return p;
       });
       setPaymentsLedger(updatedLedger);
       localStorage.setItem('barda_payments_ledger', JSON.stringify(updatedLedger));
+      if (updatedLedgerObj) {
+        saveFirestoreDocument('barda_payments_ledger', String(editMovementForm.id), updatedLedgerObj);
+      }
     }
 
     setEditingMovement(null);
@@ -2614,26 +3144,33 @@ export default function App() {
     if (!confirm(`¿Desea eliminar el asiento "${item.codigo} - ${item.operacion}"?`)) return;
 
     if (item.isFixedCost) {
-      deleteFixedCost(item.originalId);
+      deleteFixedCost(Number(item.originalId));
     } else if (item.isLedger) {
       const updated = paymentsLedger.filter(p => String(p.id) !== String(item.originalId));
       setPaymentsLedger(updated);
       localStorage.setItem('barda_payments_ledger', JSON.stringify(updated));
+      deleteFirestoreDocument('barda_payments_ledger', String(item.originalId));
     }
   };
 
   const toggleMovementStatus = (item: any) => {
     const origId = item.originalId || item.id;
     if (item.isFixedCost) {
+      let updatedCostObj: any = null;
       const updated = fixedCosts.map(c => {
         if (String(c.id) === String(origId)) {
           const nextPending = !c.pendingPayment;
-          return { ...c, pendingPayment: nextPending };
+          const updatedCost = { ...c, pendingPayment: nextPending };
+          updatedCostObj = updatedCost;
+          return updatedCost;
         }
         return c;
       });
       setFixedCosts(updated);
       localStorage.setItem('barda_fixed_costs', JSON.stringify(updated));
+      if (updatedCostObj) {
+        saveFirestoreDocument('barda_fixed_costs', String(origId), updatedCostObj);
+      }
       if (selectedTransactionDetail && String(selectedTransactionDetail.originalId || selectedTransactionDetail.id) === String(origId)) {
         setSelectedTransactionDetail({
           ...selectedTransactionDetail,
@@ -2641,15 +3178,21 @@ export default function App() {
         });
       }
     } else if (item.isLedger) {
+      let updatedPayObj: any = null;
       const updated = paymentsLedger.map(p => {
         if (String(p.id) === String(origId)) {
           const nextPending = !p.pendingPayment;
-          return { ...p, pendingPayment: nextPending };
+          const updatedPay = { ...p, pendingPayment: nextPending };
+          updatedPayObj = updatedPay;
+          return updatedPay;
         }
         return p;
       });
       setPaymentsLedger(updated);
       localStorage.setItem('barda_payments_ledger', JSON.stringify(updated));
+      if (updatedPayObj) {
+        saveFirestoreDocument('barda_payments_ledger', String(origId), updatedPayObj);
+      }
       if (selectedTransactionDetail && String(selectedTransactionDetail.originalId || selectedTransactionDetail.id) === String(origId)) {
         setSelectedTransactionDetail({
           ...selectedTransactionDetail,
@@ -2685,6 +3228,8 @@ export default function App() {
     const updated = [...fixedCosts, cost];
     setFixedCosts(updated);
     localStorage.setItem('barda_fixed_costs', JSON.stringify(updated));
+    saveFirestoreDocument('barda_fixed_costs', String(cost.id), cost);
+
     setNewFixedCost({
       category: 'Alquiler',
       description: '',
@@ -2733,22 +3278,29 @@ export default function App() {
     const updatedLedger = [...paymentsLedger, newPay];
     setPaymentsLedger(updatedLedger);
     localStorage.setItem('barda_payments_ledger', JSON.stringify(updatedLedger));
+    saveFirestoreDocument('barda_payments_ledger', String(newPay.id), newPay);
 
     // Update sale order
+    let updatedOrderObj: any = null;
     const updatedSales = sales.map(s => {
       if (s.id === order.id) {
         const newSena = (s.senaAmount || 0) + totalAmount;
         const newPayStatus = newSena >= s.total ? 'Pagado' : 'Señado';
-        return {
+        const updatedSale = {
           ...s,
           senaAmount: Math.min(s.total, newSena),
           paymentStatus: newPayStatus
         };
+        updatedOrderObj = updatedSale;
+        return updatedSale;
       }
       return s;
     });
     setSales(updatedSales);
     localStorage.setItem('barda_sales_orders', JSON.stringify(updatedSales));
+    if (updatedOrderObj) {
+      saveFirestoreDocument('barda_sales_orders', String(order.id), updatedOrderObj);
+    }
 
     // Clear payment register form
     setPaymentRegisterForm({
@@ -2793,6 +3345,8 @@ export default function App() {
     const updatedLedger = [...paymentsLedger, newIncome];
     setPaymentsLedger(updatedLedger);
     localStorage.setItem('barda_payments_ledger', JSON.stringify(updatedLedger));
+    saveFirestoreDocument('barda_payments_ledger', String(newIncome.id), newIncome);
+
     setCustomIncomeForm({
       concept: '',
       category: 'Aporte de Capital',
@@ -2838,6 +3392,7 @@ export default function App() {
       const updated = [...fixedCosts, cost];
       setFixedCosts(updated);
       localStorage.setItem('barda_fixed_costs', JSON.stringify(updated));
+      saveFirestoreDocument('barda_fixed_costs', String(cost.id), cost);
       alert('¡Gasto / Egreso registrado con éxito en el Libro de Movimientos!');
     } else {
       // INGRESO
@@ -2866,21 +3421,28 @@ export default function App() {
         const updatedLedger = [...paymentsLedger, newPay];
         setPaymentsLedger(updatedLedger);
         localStorage.setItem('barda_payments_ledger', JSON.stringify(updatedLedger));
+        saveFirestoreDocument('barda_payments_ledger', String(newPay.id), newPay);
 
+        let updatedSaleObj: any = null;
         const updatedSales = sales.map(s => {
           if (s.id === order.id) {
             const newSena = (s.senaAmount || 0) + totalAmount;
             const newPayStatus = newSena >= s.total ? 'Pagado' : 'Señado';
-            return {
+            const updatedSale = {
               ...s,
               senaAmount: Math.min(s.total, newSena),
               paymentStatus: newPayStatus
             };
+            updatedSaleObj = updatedSale;
+            return updatedSale;
           }
           return s;
         });
         setSales(updatedSales);
         localStorage.setItem('barda_sales_orders', JSON.stringify(updatedSales));
+        if (updatedSaleObj) {
+          saveFirestoreDocument('barda_sales_orders', String(order.id), updatedSaleObj);
+        }
         alert('¡Cobro de saldo registrado con éxito en el Libro de Movimientos!');
       } else {
         // Ingreso Directo
@@ -2907,6 +3469,7 @@ export default function App() {
         const updatedLedger = [...paymentsLedger, newIncome];
         setPaymentsLedger(updatedLedger);
         localStorage.setItem('barda_payments_ledger', JSON.stringify(updatedLedger));
+        saveFirestoreDocument('barda_payments_ledger', String(newIncome.id), newIncome);
         alert('¡Ingreso registrado con éxito en el Libro de Movimientos!');
       }
     }
@@ -3134,6 +3697,7 @@ export default function App() {
     
     setFabList(updated);
     localStorage.setItem('barda_fabricacion_list', JSON.stringify(updated));
+    saveFirestoreDocument('barda_fabricacion_list', String(orderData.id), orderData);
   };
 
   const downloadFabricationOrderAndAttachments = (data: {
@@ -3321,6 +3885,7 @@ export default function App() {
     }
     setFabList(updatedFabList);
     localStorage.setItem('barda_fabricacion_list', JSON.stringify(updatedFabList));
+    saveFirestoreDocument('barda_fabricacion_list', String(newFabOrder.id), newFabOrder);
 
     // 2. Set active fabrication state for designer
     setFabCliente({
@@ -3396,13 +3961,18 @@ export default function App() {
   };
 
   const filteredSales = sales.filter(s => {
-    const searchLower = salesSearch.toLowerCase().trim();
+    const searchLower = (salesSearch || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+    const normalize = (val: string) => (val || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
     const matchName = !searchLower || 
-                      s.client?.nombre?.toLowerCase().includes(searchLower) || 
-                      s.orderNum?.toLowerCase().includes(searchLower) ||
-                      s.client?.telefono?.toLowerCase().includes(searchLower) ||
-                      s.client?.direccion?.toLowerCase().includes(searchLower) ||
-                      s.items?.some((it: any) => (it.name || it.nombre || '').toLowerCase().includes(searchLower) || (it.detail || it.medidas || '').toLowerCase().includes(searchLower));
+                      normalize(s.client?.nombre).includes(searchLower) || 
+                      normalize(s.orderNum).includes(searchLower) ||
+                      normalize(s.client?.telefono).includes(searchLower) ||
+                      normalize(s.client?.direccion).includes(searchLower) ||
+                      normalize(s.client?.cuit).includes(searchLower) ||
+                      normalize(s.client?.email).includes(searchLower) ||
+                      normalize(s.notes).includes(searchLower) ||
+                      s.items?.some((it: any) => normalize(it.name || it.nombre).includes(searchLower) || normalize(it.detail || it.medidas).includes(searchLower));
     const matchStatus = salesStatusFilter === 'Todos' || s.status === salesStatusFilter;
     const matchPay = salesPayFilter === 'Todos' || s.paymentStatus === salesPayFilter;
     
@@ -3674,30 +4244,35 @@ export default function App() {
   const metrics = getDashboardMetrics();
 
   const handleUpdateFunnel = (field: 'phones' | 'visits', value: number) => {
+    const key = currentPeriodKey;
+    const current = funnelOverrides[key] || { phones: 0, visits: 0 };
+    const nextVal = Math.max(0, value);
+    const updatedEntry = {
+      ...current,
+      [field]: nextVal
+    };
     setFunnelOverrides(prev => {
-      const key = currentPeriodKey;
-      const current = prev[key] || { phones: 0, visits: 0 };
-      const nextVal = Math.max(0, value);
-      return {
+      const updated = {
         ...prev,
-        [key]: {
-          ...current,
-          [field]: nextVal
-        }
+        [key]: updatedEntry
       };
+      localStorage.setItem('barda_funnel_overrides', JSON.stringify(updated));
+      return updated;
     });
+    saveFirestoreDocument('barda_funnel_overrides', key, { id: key, key, ...updatedEntry });
   };
 
   if (!currentUser) {
     return <AuthScreen onLoginSuccess={(u) => { setCurrentUser(u); }} />;
   }
 
-  const canEditPresupuestos = currentUser.permissions.presupuestos.edit;
-  const canEditVentas = currentUser.permissions.ventas.edit;
-  const canEditRemitos = currentUser.permissions.remitos.edit;
-  const canEditFabricacion = currentUser.permissions.fabricacion.edit;
-  const canEditFinanzas = currentUser.permissions.finanzas.edit;
-  const canEditResumen = currentUser.permissions.resumen.edit;
+  const canEditPresupuestos = currentUser.permissions.presupuestos?.edit ?? true;
+  const canEditVentas = currentUser.permissions.ventas?.edit ?? true;
+  const canEditRemitos = currentUser.permissions.remitos?.edit ?? true;
+  const canEditFabricacion = currentUser.permissions.fabricacion?.edit ?? true;
+  const canEditStock = currentUser.permissions.stock?.edit ?? true;
+  const canEditFinanzas = currentUser.permissions.finanzas?.edit ?? true;
+  const canEditResumen = currentUser.permissions.resumen?.edit ?? true;
 
   return (
     <div className="min-h-screen flex flex-col font-sans text-brown bg-light-cream">
@@ -3706,7 +4281,16 @@ export default function App() {
       <header className="bg-white border-b-2 border-sand px-6 py-3.5 flex flex-col md:flex-row items-center justify-between gap-4 shadow-sm print:hidden">
         {/* Left side: Logo + Navigation Sections */}
         <div className="flex flex-wrap items-center gap-4">
-          <BardaLogo size="md" />
+          <div 
+            onClick={() => setShowCompanyLogoModal(true)}
+            className="cursor-pointer group relative transition-transform hover:scale-[1.02]"
+            title="Hacé clic para ver o actualizar la foto del logo"
+          >
+            <BardaLogo size="md" />
+            <div className="absolute -bottom-1 -right-1 p-1 bg-terra text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity shadow-xs">
+              <Pencil className="w-2.5 h-2.5" />
+            </div>
+          </div>
           <div className="w-[1.5px] h-8 bg-sand hidden sm:block"></div>
 
           {/* Global tab navigation */}
@@ -3733,6 +4317,14 @@ export default function App() {
                 className={`px-2 sm:px-3 md:px-4 py-1 sm:py-1.5 rounded-md text-[10px] sm:text-xs font-bold tracking-wide sm:tracking-wider uppercase transition-all duration-150 cursor-pointer ${activeTab === 'finanzas' ? 'bg-brown text-cream shadow-sm' : 'text-stone hover:bg-cream/40'}`}
               >
                 Tesorería
+              </button>
+            )}
+            {(currentUser.permissions.stock?.view ?? true) && (
+              <button 
+                onClick={() => setActiveTab('stock')}
+                className={`px-2 sm:px-3 md:px-4 py-1 sm:py-1.5 rounded-md text-[10px] sm:text-xs font-bold tracking-wide sm:tracking-wider uppercase transition-all duration-150 cursor-pointer ${activeTab === 'stock' ? 'bg-brown text-cream shadow-sm' : 'text-stone hover:bg-cream/40'}`}
+              >
+                Stock
               </button>
             )}
             {currentUser.permissions.resumen.view && (
@@ -3784,6 +4376,33 @@ export default function App() {
                 >
                   <UserIcon className="w-4 h-4 text-terra" />
                   <span>Mi perfil</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowUserMenu(false);
+                    setShowCompanyLogoModal(true);
+                  }}
+                  className="w-full px-3 py-2 text-xs font-semibold text-brown hover:bg-cream/50 rounded-xl flex items-center gap-2.5 transition-colors cursor-pointer text-left"
+                >
+                  <ImageIcon className="w-4 h-4 text-terra" />
+                  <span>Logo de Empresa (Foto)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleManualSync}
+                  disabled={isManualSyncing}
+                  className="w-full px-3 py-2 text-xs font-semibold text-brown hover:bg-cream/50 rounded-xl flex items-center justify-between gap-2.5 transition-colors cursor-pointer text-left"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <RefreshCw className={`w-4 h-4 text-terra ${isManualSyncing ? 'animate-spin' : ''}`} />
+                    <span>{isManualSyncing ? 'Sincronizando...' : 'Sincronizar con la nube'}</span>
+                  </div>
+                  {syncFeedback && (
+                    <span className="text-[10px] text-emerald-600 font-bold">{syncFeedback}</span>
+                  )}
                 </button>
 
                 {currentUser.permissions.usuarios.view && (
@@ -3972,13 +4591,13 @@ export default function App() {
                 
                 {/* Catalog type tabs */}
                 <div className="flex bg-light-cream border border-sand rounded-lg p-0.5 gap-0.5 mb-5 overflow-x-auto">
-                  {(['silla', 'mesa', 'circular', 'ratona', 'otro'] as const).map(tab => (
+                  {(['silla', 'mesa', 'circular', 'ratona', 'stock', 'otro'] as const).map(tab => (
                     <button
                       key={tab}
                       onClick={() => setAddTab(tab)}
                       className={`flex-1 min-w-[70px] text-center py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all duration-150 ${addTab === tab ? 'bg-brown text-cream' : 'text-stone hover:bg-cream/40'}`}
                     >
-                      {tab === 'silla' ? 'Sillas' : tab === 'mesa' ? 'Mesas' : tab === 'circular' ? 'Mesas Circ.' : tab === 'ratona' ? 'Ratonas' : 'Otros'}
+                      {tab === 'silla' ? 'Sillas' : tab === 'mesa' ? 'Mesas' : tab === 'circular' ? 'Mesas Circ.' : tab === 'ratona' ? 'Ratonas' : tab === 'stock' ? '📦 Stock' : 'Otros'}
                     </button>
                   ))}
                 </div>
@@ -4414,6 +5033,118 @@ export default function App() {
                   </div>
                 )}
 
+                {/* STOCK ITEM BUILDER */}
+                {addTab === 'stock' && (
+                  <div className="flex flex-col gap-4">
+                    <div className="p-3 bg-amber-50/60 border border-terra/20 rounded-lg text-xs text-brown flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Package className="w-4 h-4 text-terra" />
+                        <span>Los productos vendidos desde <strong>Stock Físico</strong> tienen entrega inmediata y descuentan inventario automáticamente al confirmar la venta.</span>
+                      </div>
+                      <span className="text-[10px] font-bold uppercase px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded-md">
+                        {stockList.filter(s => s.qty > 0).length} Disponibles
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="md:col-span-2 flex flex-col gap-1.5">
+                        <label className="text-[10px] tracking-wider uppercase text-stone font-bold">Seleccionar Producto del Stock</label>
+                        <select
+                          value={selectedStockForQuote}
+                          onChange={e => {
+                            const stkId = e.target.value;
+                            setSelectedStockForQuote(stkId);
+                            const found = stockList.find(s => s.id === stkId);
+                            if (found) {
+                              setStockQuoteCustomPrice(String(found.priceSuggested || 0));
+                            }
+                          }}
+                          className="text-xs py-2 px-3 border border-sand rounded-lg bg-white text-brown font-sans focus:ring-1 focus:ring-terra focus:outline-none w-full font-medium shadow-xs cursor-pointer"
+                        >
+                          <option value="">Seleccionar producto en stock...</option>
+                          {stockList.map(stk => (
+                            <option key={stk.id} value={stk.id} disabled={stk.qty <= 0}>
+                              {stk.name} ({stk.category}) — {stk.qty > 0 ? `${stk.qty} u. disponibles` : 'Sin Stock'} — Sugerido: {fmt(stk.priceSuggested)}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-[10px] tracking-wider uppercase text-stone font-bold">Precio Unitario Venta ($)</label>
+                        <input
+                          type="number"
+                          placeholder="Precio venta"
+                          value={stockQuoteCustomPrice}
+                          onChange={e => setStockQuoteCustomPrice(e.target.value)}
+                          className="text-xs py-2 px-3 border border-sand rounded-lg bg-white text-brown font-sans focus:ring-1 focus:ring-terra focus:outline-none font-bold"
+                        />
+                      </div>
+                    </div>
+
+                    {(() => {
+                      const selectedStk = stockList.find(s => s.id === selectedStockForQuote);
+                      if (!selectedStk) return null;
+                      return (
+                        <div className="p-3 bg-[#FAF6F0] border border-sand rounded-lg flex items-center justify-between text-xs">
+                          <div>
+                            <span className="font-bold text-brown">{selectedStk.name}</span>
+                            {selectedStk.detail && <span className="text-stone ml-2">· {selectedStk.detail}</span>}
+                          </div>
+                          <div className="flex items-center gap-3 text-[11px]">
+                            <span>Costo: <strong className="text-stone">{fmt(selectedStk.costUnit)}</strong></span>
+                            <span>Stock actual: <strong className={selectedStk.qty > 0 ? 'text-emerald-700' : 'text-rose-600'}>{selectedStk.qty} u.</strong></span>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    <div className="flex items-center justify-between mt-2 pt-4 border-t border-sand">
+                      <div className="flex items-center gap-3">
+                        <div className="w-24">
+                          <label className="text-[10px] tracking-wider uppercase text-stone font-bold mb-1 block">Cantidad</label>
+                          <input
+                            type="number"
+                            min="1"
+                            max={stockList.find(s => s.id === selectedStockForQuote)?.qty || 99}
+                            value={stockQuoteQty}
+                            onChange={e => setStockQuoteQty(Math.max(1, parseInt(e.target.value) || 1))}
+                            className="text-xs py-1.5 px-2 border border-sand rounded-lg bg-white text-brown font-sans focus:ring-1 focus:ring-terra focus:outline-none text-center w-full font-bold shadow-xs"
+                          />
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => {
+                          const stk = stockList.find(s => s.id === selectedStockForQuote);
+                          if (!stk) return;
+                          const p = parseFloat(stockQuoteCustomPrice) || stk.priceSuggested;
+                          const newItem = {
+                            id: Date.now(),
+                            name: stk.name,
+                            detail: stk.detail ? `${stk.detail} · Entrega Inmediata (Stock)` : 'Entrega Inmediata (Stock)',
+                            unitPrice: p,
+                            cost: stk.costUnit,
+                            qty: stockQuoteQty,
+                            category: stk.category || 'Stock',
+                            fromStock: true,
+                            stockItemId: stk.id
+                          };
+                          setQuoteItems([...quoteItems, newItem]);
+                          setSelectedStockForQuote('');
+                          setStockQuoteCustomPrice('');
+                          setStockQuoteQty(1);
+                        }}
+                        disabled={!selectedStockForQuote || (stockList.find(s => s.id === selectedStockForQuote)?.qty || 0) < stockQuoteQty}
+                        className="bg-brown text-cream px-6 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider hover:bg-terra active:scale-95 transition-all duration-150 disabled:opacity-40 disabled:scale-100 disabled:cursor-not-allowed mt-4 flex items-center gap-2"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        + Agregar desde Stock
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {/* OTROS BUILDER */}
                 {addTab === 'otro' && (
                   <div className="flex flex-col gap-4">
@@ -4702,21 +5433,33 @@ export default function App() {
                               <div className="flex items-center gap-2 flex-wrap">
                                 <div className="flex items-center gap-1.5">
                                   <span>Cant:</span>
-                                  {/* Quick Qty +/- controls (print:hidden) */}
+                                  {/* Quick Qty +/- controls and direct number input (print:hidden) */}
                                   <div className="inline-flex items-center border border-sand rounded-md bg-white shadow-2xs print:hidden">
                                     <button
                                       type="button"
-                                      onClick={() => handleUpdateQuoteItemQty(it.id, it.qty - 1)}
-                                      className="w-4 h-4 flex items-center justify-center text-[11px] font-bold text-stone hover:text-brown hover:bg-cream/60 transition-colors"
+                                      onClick={() => handleUpdateQuoteItemQty(it.id, Math.max(1, it.qty - 1))}
+                                      className="w-5 h-5 flex items-center justify-center text-xs font-bold text-stone hover:text-brown hover:bg-cream/60 transition-colors"
                                       title="Disminuir cantidad"
                                     >
                                       &minus;
                                     </button>
-                                    <span className="px-1 text-xs font-bold text-brown min-w-[18px] text-center">{it.qty}</span>
+                                    <input
+                                      type="number"
+                                      min="1"
+                                      value={it.qty}
+                                      onChange={(e) => {
+                                        const val = parseInt(e.target.value, 10);
+                                        if (!isNaN(val) && val > 0) {
+                                          handleUpdateQuoteItemQty(it.id, val);
+                                        }
+                                      }}
+                                      className="w-8 text-xs font-bold text-brown text-center bg-transparent border-none p-0 focus:outline-none focus:bg-cream/40"
+                                      title="Escribir cantidad"
+                                    />
                                     <button
                                       type="button"
                                       onClick={() => handleUpdateQuoteItemQty(it.id, it.qty + 1)}
-                                      className="w-4 h-4 flex items-center justify-center text-[11px] font-bold text-stone hover:text-brown hover:bg-cream/60 transition-colors"
+                                      className="w-5 h-5 flex items-center justify-center text-xs font-bold text-stone hover:text-brown hover:bg-cream/60 transition-colors"
                                       title="Aumentar cantidad"
                                     >
                                       +
@@ -5170,7 +5913,15 @@ export default function App() {
                           type="number"
                           min="1"
                           value={editingQuoteItem.qty}
-                          onChange={e => setEditingQuoteItem({ ...editingQuoteItem, qty: parseInt(e.target.value) || 1 })}
+                          onChange={e => {
+                            const val = e.target.value === '' ? '' : parseInt(e.target.value, 10);
+                            setEditingQuoteItem({ ...editingQuoteItem, qty: val === '' ? ('' as any) : Math.max(1, !isNaN(val) ? val : 1) });
+                          }}
+                          onBlur={e => {
+                            if (!e.target.value || parseInt(e.target.value, 10) < 1) {
+                              setEditingQuoteItem({ ...editingQuoteItem, qty: 1 });
+                            }
+                          }}
                           className="w-full text-xs py-2 px-3 border border-sand rounded-lg bg-white text-brown font-sans focus:ring-1 focus:ring-terra focus:outline-none text-center font-bold"
                         />
                       </div>
@@ -6896,7 +7647,18 @@ export default function App() {
                                   >
                                     &minus;
                                   </button>
-                                  <span className="font-bold w-6">{it.qty}</span>
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    value={it.qty}
+                                    onChange={(e) => {
+                                      const val = parseInt(e.target.value, 10);
+                                      if (!isNaN(val) && val > 0) {
+                                        setRemitoItems(remitoItems.map(ri => ri.id === it.id ? { ...ri, qty: val } : ri));
+                                      }
+                                    }}
+                                    className="w-10 font-bold text-center border border-sand rounded text-xs py-0.5 focus:outline-none focus:border-terra bg-white"
+                                  />
                                   <button 
                                     onClick={() => {
                                       setRemitoItems(remitoItems.map(ri => ri.id === it.id ? { ...ri, qty: ri.qty + 1 } : ri));
@@ -7529,7 +8291,18 @@ export default function App() {
                                     }}
                                     className="w-5 h-5 rounded bg-sand/30 hover:bg-sand/60 text-xs flex items-center justify-center font-bold font-mono"
                                   >-</button>
-                                  <span className="text-xs font-bold w-6 text-center font-mono">{it.qty}</span>
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    value={it.qty}
+                                    onChange={(e) => {
+                                      const val = parseInt(e.target.value, 10);
+                                      if (!isNaN(val) && val > 0) {
+                                        setFabItems(fabItems.map(ri => ri.id === it.id ? { ...ri, qty: val } : ri));
+                                      }
+                                    }}
+                                    className="w-10 text-xs font-bold text-center font-mono border border-sand rounded py-0.5 focus:outline-none focus:border-terra bg-white"
+                                  />
                                   <button 
                                     onClick={() => {
                                       setFabItems(fabItems.map(ri => ri.id === it.id ? { ...ri, qty: ri.qty + 1 } : ri));
@@ -9055,15 +9828,16 @@ export default function App() {
                                     >
                                       <Eye className="w-3.5 h-3.5" />
                                     </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => deleteFixedCost(c.id)}
-                                      disabled={!canEditFinanzas}
-                                      className="p-1 text-stone/60 hover:text-rose-600 transition-colors disabled:opacity-40"
-                                      title="Eliminar egreso"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
+                                    {canEditFinanzas && (
+                                      <button
+                                        type="button"
+                                        onClick={() => deleteFixedCost(c.id)}
+                                        className="p-1 text-stone/60 hover:text-rose-600 transition-colors"
+                                        title="Eliminar gasto"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
                                   </div>
                                 </div>
                               </div>
@@ -9076,849 +9850,80 @@ export default function App() {
                 </div>
               )}
 
-              {/* SUBTAB: RESUMEN */}
-              {tesoreriaSubTab === 'resumen' && (
-                <>
-              {/* MONTHLY EVOLUTION SECTION (TESORERÍA OPERATIONAL CHART) */}
-              <div className="bg-[#FAF6F0] border border-[#E8DCC9] rounded-2xl p-5 sm:p-6 shadow-sm">
-                {/* HEADER & LEGEND */}
-                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-4 border-b border-[#E0D2C0]">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <BarChart2 className="w-5 h-5 text-terra" />
-                      <h3 className="font-serif text-lg font-bold text-[#3D1F0D]">
-                        Evolución Mensual de Tesorería
-                      </h3>
-                    </div>
-                    <p className="text-xs text-stone mt-1">
-                      Pasa el cursor por arriba de las barras para ver el valor exacto formateado.
-                    </p>
-                  </div>
-
-                  {/* LEGEND DOTS */}
-                  <div className="flex flex-wrap items-center gap-4 text-xs font-bold text-[#3D1F0D]">
-                    <div className="flex items-center gap-1.5">
-                      <span className="w-3 h-3 rounded-full bg-[#0284C7]"></span>
-                      <span>Flujo Neto</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="w-3 h-3 rounded-full bg-[#059669]"></span>
-                      <span>Ingresos</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="w-3 h-3 rounded-full bg-[#E11D48]"></span>
-                      <span>Egresos</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="w-3 h-3 rounded-full bg-[#D97706]"></span>
-                      <span>Por Cobrar</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* MAIN CONTENT: 4 SUMMARY CARDS LEFT + BAR CHART RIGHT */}
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch mt-5">
-                  {/* LEFT COLUMN: 4 STACKED SUMMARY CARDS */}
-                  <div className="lg:col-span-4 flex flex-col justify-between gap-3">
-                    {/* Card 1: CAJA / FLUJO NETO */}
-                    <div className="bg-[#F6F0E6] border border-[#E5D8C5] rounded-xl p-3.5 flex flex-col justify-between shadow-2xs">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] uppercase font-bold tracking-wider text-stone/90">
-                          CAJA / FLUJO NETO
-                        </span>
-                        <span className="bg-emerald-100 text-emerald-800 font-bold text-[10px] px-2 py-0.5 rounded-full">
-                          Percibido
-                        </span>
-                      </div>
-                      <div className="text-xl sm:text-2xl font-serif font-bold text-[#3D1F0D] my-1">
-                        {fmt(flujoNetoDeCaja)}
-                      </div>
-                      <p className="text-[10px] text-stone">Ingresos cobrados - Egresos pagados</p>
-                      <div className="w-full h-1 bg-[#0284C7] rounded-full mt-1.5"></div>
-                    </div>
-
-                    {/* Card 2: TOTAL INGRESOS */}
-                    <div className="bg-[#F6F0E6] border border-[#E5D8C5] rounded-xl p-3.5 flex flex-col justify-between shadow-2xs">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] uppercase font-bold tracking-wider text-stone/90">
-                          TOTAL INGRESOS
-                        </span>
-                        <div className="p-1 bg-emerald-100 text-emerald-700 rounded-full">
-                          <TrendingUp className="w-3.5 h-3.5" />
-                        </div>
-                      </div>
-                      <div className="text-xl sm:text-2xl font-serif font-bold text-[#047857] my-1">
-                        {fmt(totalIngresosCobrados)}
-                      </div>
-                      <p className="text-[10px] text-stone">Señas + Saldos + Ingresos Directos</p>
-                      <div className="w-full h-1 bg-[#059669] rounded-full mt-1.5"></div>
-                    </div>
-
-                    {/* Card 3: TOTAL EGRESOS */}
-                    <div className="bg-[#F6F0E6] border border-[#E5D8C5] rounded-xl p-3.5 flex flex-col justify-between shadow-2xs">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] uppercase font-bold tracking-wider text-stone/90">
-                          TOTAL EGRESOS
-                        </span>
-                        <div className="p-1 bg-rose-100 text-rose-700 rounded-full">
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </div>
-                      </div>
-                      <div className="text-xl sm:text-2xl font-serif font-bold text-[#E11D48] my-1">
-                        -${fmt(totalCostoFijo)}
-                      </div>
-                      <p className="text-[10px] text-stone">Costos fijos y gastos de fábrica</p>
-                      <div className="w-full h-1 bg-[#E11D48] rounded-full mt-1.5"></div>
-                    </div>
-
-                    {/* Card 4: POR COBRAR */}
-                    <div className="bg-[#F6F0E6] border border-[#E5D8C5] rounded-xl p-3.5 flex flex-col justify-between shadow-2xs">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] uppercase font-bold tracking-wider text-stone/90">
-                          POR COBRAR
-                        </span>
-                        <span className="bg-amber-100 text-amber-800 font-bold text-[10px] px-2 py-0.5 rounded-full">
-                          {ordersWithBalance.length} Pedidos
-                        </span>
-                      </div>
-                      <div className="text-xl sm:text-2xl font-serif font-bold text-[#D97706] my-1">
-                        {fmt(totalSaldosPendientes)}
-                      </div>
-                      <p className="text-[10px] text-stone">Saldos pendientes a la entrega</p>
-                      <div className="w-full h-1 bg-[#D97706] rounded-full mt-1.5"></div>
-                    </div>
-                  </div>
-
-                  {/* RIGHT COLUMN: VERTICAL GROUPED BAR CHART */}
-                  <div className="lg:col-span-8 flex flex-col justify-end pl-0 lg:pl-4 border-l-0 lg:border-l border-[#E2D4C2]">
-                    <div className="w-full overflow-x-auto pb-2">
-                      <div className="min-w-[580px] h-64 flex items-end justify-between gap-3 pt-6 pb-1 px-2">
-                        {monthlyData.map(d => {
-                          const iHeight = (d.cobros / maxVal) * 100;
-                          const eHeight = (d.costoFijo / maxVal) * 100;
-                          const fHeight = (Math.max(0, d.flujo) / maxVal) * 100;
-                          const pcHeight = (d.porCobrar / maxVal) * 100;
-                          const isFilteredMonth = finanzasMonth === d.num;
-
-                          return (
-                            <div 
-                              key={d.num} 
-                              className={`flex-1 flex flex-col items-center group cursor-pointer transition-all p-1.5 rounded-xl ${
-                                isFilteredMonth ? 'bg-terra/10 ring-2 ring-terra/40' : 'hover:bg-[#EAE0D2]/50'
-                              }`}
-                              onClick={() => setFinanzasMonth(isFilteredMonth ? 'todos' : d.num)}
-                            >
-                              {/* Grouped Bars Container */}
-                              <div className="w-full h-44 flex items-end justify-center gap-1 relative">
-                                {/* Blue Bar: Flujo Neto */}
-                                <div 
-                                  className="w-2.5 sm:w-3 bg-[#0284C7] rounded-t-full relative group/bar transition-all hover:brightness-110" 
-                                  style={{ height: `${Math.max(fHeight, 3)}%` }}
-                                >
-                                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 bg-[#3D1F0D] text-cream text-[10px] px-2 py-1 rounded-md opacity-0 group-hover/bar:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-30 font-mono shadow-lg border border-terra/30">
-                                    Flujo Neto ({d.label}): <strong>{fmt(d.flujo)}</strong>
-                                  </div>
-                                </div>
-
-                                {/* Green Bar: Ingresos */}
-                                <div 
-                                  className="w-2.5 sm:w-3 bg-[#059669] rounded-t-full relative group/bar transition-all hover:brightness-110" 
-                                  style={{ height: `${Math.max(iHeight, 3)}%` }}
-                                >
-                                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 bg-[#3D1F0D] text-cream text-[10px] px-2 py-1 rounded-md opacity-0 group-hover/bar:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-30 font-mono shadow-lg border border-terra/30">
-                                    Ingresos ({d.label}): <strong>{fmt(d.cobros)}</strong>
-                                  </div>
-                                </div>
-
-                                {/* Red Bar: Egresos */}
-                                <div 
-                                  className="w-2.5 sm:w-3 bg-[#E11D48] rounded-t-full relative group/bar transition-all hover:brightness-110" 
-                                  style={{ height: `${Math.max(eHeight, 3)}%` }}
-                                >
-                                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 bg-[#3D1F0D] text-cream text-[10px] px-2 py-1 rounded-md opacity-0 group-hover/bar:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-30 font-mono shadow-lg border border-terra/30">
-                                    Egresos ({d.label}): <strong>{fmt(d.costoFijo)}</strong>
-                                  </div>
-                                </div>
-
-                                {/* Amber Bar: Por Cobrar */}
-                                <div 
-                                  className="w-2.5 sm:w-3 bg-[#D97706] rounded-t-full relative group/bar transition-all hover:brightness-110" 
-                                  style={{ height: `${Math.max(pcHeight, 3)}%` }}
-                                >
-                                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 bg-[#3D1F0D] text-cream text-[10px] px-2 py-1 rounded-md opacity-0 group-hover/bar:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-30 font-mono shadow-lg border border-terra/30">
-                                    Por Cobrar ({d.label}): <strong>{fmt(d.porCobrar)}</strong>
-                                  </div>
-                                </div>
-                              </div>
-
-                              {/* Baseline */}
-                              <div className="w-full border-b-2 border-[#D8C8B8] my-2"></div>
-
-                              {/* Month Label */}
-                              <span className="text-xs font-bold text-[#3D1F0D]">
-                                {d.label.substring(0, 3)}
-                              </span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* EXPORT CENTER CARD */}
-              <div className="bg-white border-2 border-sand rounded-2xl p-6 shadow-sm mt-6">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-sand pb-4 mb-4">
-                  <div>
-                    <h3 className="font-serif text-lg font-bold text-brown flex items-center gap-2">
-                      <FileText className="w-5 h-5 text-terra" />
-                      Centro de Exportación de Reportes
-                    </h3>
-                    <p className="text-xs text-stone">Descargá tus datos financieros limpios e importalos con un clic en Google Sheets o Excel.</p>
-                  </div>
-                  <span className="text-[10px] bg-emerald-50 text-emerald-800 font-bold px-2.5 py-1 rounded-full uppercase tracking-wider flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                    Listo para planilla
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  
-                  {/* Export P&L */}
-                  <button
-                    type="button"
-                    onClick={() => exportToCSV('pl', filteredPayments, filteredFixedCosts, totalVentas, totalCostoVariable, totalCostoFijo)}
-                    className="p-4 bg-light-cream/40 hover:bg-cream border border-sand/60 rounded-xl text-left flex flex-col justify-between transition-all group"
-                  >
-                    <div className="flex justify-between items-start w-full mb-3">
-                      <div className="p-2 bg-brown/5 rounded-lg text-brown group-hover:bg-brown group-hover:text-cream transition-all font-bold">
-                        <TrendingUp className="w-5 h-5" />
-                      </div>
-                      <Download className="w-4 h-4 text-stone group-hover:text-terra transition-all font-bold" />
-                    </div>
-                    <div>
-                      <strong className="text-xs text-brown block">Reporte de Pérdidas y Ganancias (P&L)</strong>
-                      <span className="text-[10px] text-stone block mt-1">Margen operativo, ingresos devengados y desglose de costos fijos del mes.</span>
-                    </div>
-                  </button>
-
-                  {/* Export payments */}
-                  <button
-                    type="button"
-                    onClick={() => exportToCSV('payments', filteredPayments, filteredFixedCosts, totalVentas, totalCostoVariable, totalCostoFijo)}
-                    className="p-4 bg-light-cream/40 hover:bg-cream border border-sand/60 rounded-xl text-left flex flex-col justify-between transition-all group"
-                  >
-                    <div className="flex justify-between items-start w-full mb-3">
-                      <div className="p-2 bg-brown/5 rounded-lg text-brown group-hover:bg-brown group-hover:text-cream transition-all font-bold">
-                        <DollarSign className="w-5 h-5" />
-                      </div>
-                      <Download className="w-4 h-4 text-stone group-hover:text-terra transition-all font-bold" />
-                    </div>
-                    <div>
-                      <strong className="text-xs text-brown block">Libro de Caja y Cobranza Real</strong>
-                      <span className="text-[10px] text-stone block mt-1">Historial de entradas (señas y cobro de saldos) con cuentas de destino asimiladas.</span>
-                    </div>
-                  </button>
-
-                  {/* Export outstanding balances */}
-                  <button
-                    type="button"
-                    onClick={() => exportToCSV('outstanding', filteredPayments, filteredFixedCosts, totalVentas, totalCostoVariable, totalCostoFijo)}
-                    className="p-4 bg-light-cream/40 hover:bg-cream border border-sand/60 rounded-xl text-left flex flex-col justify-between transition-all group"
-                  >
-                    <div className="flex justify-between items-start w-full mb-3">
-                      <div className="p-2 bg-brown/5 rounded-lg text-brown group-hover:bg-brown group-hover:text-cream transition-all font-bold">
-                        <Clock className="w-5 h-5" />
-                      </div>
-                      <Download className="w-4 h-4 text-stone group-hover:text-terra transition-all font-bold" />
-                    </div>
-                    <div>
-                      <strong className="text-xs text-brown block">Libro de Cuentas a Cobrar (Saldos)</strong>
-                      <span className="text-[10px] text-stone block mt-1">Saldos pendientes de cobro ordenados por pedido con fechas de entrega proyectadas.</span>
-                    </div>
-                  </button>
-
-                </div>
-
-                <div className="mt-5 p-3.5 bg-light-cream/30 border border-sand/30 rounded-xl text-[10px] text-stone leading-relaxed">
-                  💡 <strong>¿Cómo importarlo en Google Sheets?</strong> Creá una nueva hoja en Google Sheets, seleccioná <strong>Archivo &gt; Importar &gt; Subir</strong>, seleccioná el archivo descargado y elegí "Detectar automáticamente" o "Semicolon" como separador. Todo se organizará al instante en columnas limpias con formato numérico.
-                </div>
-              </div>
-              </>
-              )}
-
-              {/* SUBTAB: LIBRO DE MOVIMIENTOS */}
-              {tesoreriaSubTab === 'movimientos' && (() => {
-                const allMovements: TransactionDetailItem[] = [
-                  ...filteredPayments.map(p => ({
-                    rawType: 'ingreso' as const,
-                    isLedger: true,
-                    isFixedCost: false,
-                    originalId: p.id,
-                    codigo: p.orderNum ? `ING-${p.orderNum}` : `ING-${String(p.id).slice(-4)}`,
-                    fecha: p.date || '—',
-                    entidad: p.clientName || 'Consumidor Final',
-                    clientName: p.clientName || 'Consumidor Final',
-                    operacion: p.note || (p.type === 'Saldo' ? `Cobro Saldo Pedido #${p.orderNum}` : p.orderNum ? `Seña / Anticipo Pedido #${p.orderNum}` : 'Ingreso Directo'),
-                    descripcion: p.note || p.description,
-                    moneda: p.currency || 'ARS',
-                    medio: p.account || p.paymentMethod || 'Efectivo',
-                    cuenta: p.account || 'Efectivo',
-                    subCategoria: p.type || 'Cobro',
-                    monto: p.amount || 0,
-                    baseMonto: p.baseAmount || p.amount || 0,
-                    ivaPct: p.ivaPct || 0,
-                    estado: p.pendingPayment ? 'Pendiente' : 'Cobrado',
-                    nota: p.note,
-                    orderNum: p.orderNum,
-                    originalItem: p
-                  })),
-                  ...filteredFixedCosts.map(c => ({
-                    rawType: 'egreso' as const,
-                    isLedger: false,
-                    isFixedCost: true,
-                    originalId: c.id,
-                    codigo: `EGR-${String(c.id).slice(-4)}`,
-                    fecha: c.date || c.month || '—',
-                    entidad: c.description || c.category || 'Gasto General',
-                    operacion: c.description || 'Gasto / Egreso de Operación',
-                    descripcion: c.description,
-                    moneda: c.currency || 'ARS',
-                    medio: c.account || 'Efectivo',
-                    cuenta: c.account || 'Efectivo',
-                    subCategoria: c.category || 'Gasto Fijo',
-                    categoria: c.category,
-                    monto: c.amount || 0,
-                    baseMonto: c.baseAmount || c.amount || 0,
-                    ivaPct: c.ivaPct || 0,
-                    estado: c.pendingPayment ? 'Pendiente' : 'Pagado',
-                    nota: c.description,
-                    originalItem: c
-                  }))
-                ].sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime());
-
-                const filteredMovements = allMovements.filter(m => {
-                  if (movimientosTypeFilter === 'ingresos' && m.rawType !== 'ingreso') return false;
-                  if (movimientosTypeFilter === 'egresos' && m.rawType !== 'egreso') return false;
-                  if (movimientosTypeFilter === 'pendientes' && m.estado !== 'Pendiente') return false;
-
-                  if (!movimientosSearch.trim()) return true;
-                  const q = movimientosSearch.toLowerCase();
-                  return (
-                    m.codigo.toLowerCase().includes(q) ||
-                    m.fecha.toLowerCase().includes(q) ||
-                    m.entidad.toLowerCase().includes(q) ||
-                    m.operacion.toLowerCase().includes(q) ||
-                    m.moneda.toLowerCase().includes(q) ||
-                    m.medio.toLowerCase().includes(q) ||
-                    m.subCategoria.toLowerCase().includes(q) ||
-                    m.estado.toLowerCase().includes(q) ||
-                    String(m.monto).includes(q)
-                  );
-                });
-
-                const totalMovIngresos = filteredMovements.filter(m => m.rawType === 'ingreso').reduce((a, b) => a + b.monto, 0);
-                const totalMovEgresos = filteredMovements.filter(m => m.rawType === 'egreso').reduce((a, b) => a + b.monto, 0);
-                const balanceMov = totalMovIngresos - totalMovEgresos;
-
-                return (
-                  <div className="space-y-5">
-                    {/* 1. SEPARATED TOP HEADER WITH CTA */}
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-1">
-                      <div>
-                        <h2 className="text-2xl font-bold text-brown tracking-tight">Movimientos</h2>
-                        <p className="text-xs text-stone mt-0.5 font-medium">Historial de ingresos y egresos.</p>
-                      </div>
-
-                      {canEditFinanzas && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setNewMovementType('ingreso');
-                            setShowNewMovementModal(true);
-                          }}
-                          className="px-6 py-2.5 bg-[#0D9488] hover:bg-[#0F766E] text-white rounded-full text-xs font-bold uppercase tracking-wider transition-all shadow-md hover:shadow-lg flex items-center justify-center gap-2 cursor-pointer shrink-0 active:scale-95"
-                          title="Cargar nuevo ingreso o egreso en el libro diario"
-                        >
-                          <Plus className="w-4 h-4 stroke-[3]" />
-                          <span>+ CARGAR MOVIMIENTO</span>
-                        </button>
-                      )}
-                    </div>
-
-                    {/* 2. SUMMARY METRIC CARDS (TAMAÑO ANTERIOR COMPLETO ARRIBA) */}
-                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-                      <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-sand/70 shadow-xs">
-                        <span className="text-[10px] uppercase font-bold text-stone tracking-wider block">Asientos Filtrados</span>
-                        <span className="text-xl sm:text-2xl font-serif font-bold text-brown mt-1 block">{filteredMovements.length}</span>
-                      </div>
-                      <div className="bg-emerald-50/70 p-3.5 sm:p-4 rounded-2xl border border-emerald-200/80 shadow-xs">
-                        <span className="text-[10px] uppercase font-bold text-emerald-800 tracking-wider block">Total Ingresos</span>
-                        <span className="text-xl sm:text-2xl font-serif font-bold text-emerald-700 mt-1 block">+{fmt(totalMovIngresos)}</span>
-                      </div>
-                      <div className="bg-rose-50/70 p-3.5 sm:p-4 rounded-2xl border border-rose-200/80 shadow-xs">
-                        <span className="text-[10px] uppercase font-bold text-rose-800 tracking-wider block">Total Egresos</span>
-                        <span className="text-xl sm:text-2xl font-serif font-bold text-rose-700 mt-1 block">-{fmt(totalMovEgresos)}</span>
-                      </div>
-                      <div className={`p-3.5 sm:p-4 rounded-2xl border shadow-xs ${balanceMov >= 0 ? 'bg-sky-50/70 border-sky-200/80' : 'bg-amber-50/70 border-amber-200/80'}`}>
-                        <span className="text-[10px] uppercase font-bold text-stone tracking-wider block">Balance de Selección</span>
-                        <span className={`text-xl sm:text-2xl font-serif font-bold mt-1 block ${balanceMov >= 0 ? 'text-sky-800' : 'text-amber-800'}`}>
-                          {balanceMov >= 0 ? '+' : ''}{fmt(balanceMov)}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* 3. SEPARATED FILTER PILLS TABS */}
-                    <div className="flex items-center bg-white p-1 rounded-2xl border border-sand/70 shadow-xs w-fit">
-                      <button
-                        type="button"
-                        onClick={() => setMovimientosTypeFilter('todos')}
-                        className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
-                          movimientosTypeFilter === 'todos'
-                            ? 'bg-light-cream text-brown shadow-xs border border-sand/60'
-                            : 'text-stone hover:text-brown'
-                        }`}
-                      >
-                        <ArrowDownLeft className="w-3.5 h-3.5 text-terra" />
-                        <span>Movimientos</span>
-                        <span className="px-1.5 py-0.5 bg-emerald-50 text-emerald-700 rounded-full text-[10px] font-bold">
-                          {allMovements.length}
-                        </span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setMovimientosTypeFilter('pendientes')}
-                        className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
-                          movimientosTypeFilter === 'pendientes'
-                            ? 'bg-light-cream text-brown shadow-xs border border-sand/60'
-                            : 'text-stone hover:text-brown'
-                        }`}
-                      >
-                        <Calendar className="w-3.5 h-3.5 text-amber-600" />
-                        <span>Futuros</span>
-                        <span className="px-1.5 py-0.5 bg-amber-50 text-amber-700 rounded-full text-[10px] font-bold">
-                          {allMovements.filter(m => m.estado === 'Pendiente').length}
-                        </span>
-                      </button>
-                    </div>
-
-                    {/* 4. MAIN TABLE CARD */}
-                    <div className="bg-white border border-sand rounded-2xl shadow-xs overflow-visible">
-                      {/* CARD TOP TOOLBAR: HISTORIAL, FILTRAR, EXPORTAR, BUSCAR */}
-                      <div className="p-4 sm:p-5 border-b border-sand/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                        <h3 className="font-bold text-brown text-base">Historial</h3>
-
-                        <div className="flex flex-wrap items-center gap-2">
-                          {/* Botón Filtrar */}
-                          <div className="relative">
-                            <button
-                              type="button"
-                              onClick={() => setShowMovimientosFilterMenu(!showMovimientosFilterMenu)}
-                              className={`px-3 py-1.5 border rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-                                movimientosTypeFilter !== 'todos' || showMovimientosFilterMenu
-                                  ? 'bg-brown text-cream border-brown shadow-xs'
-                                  : 'border-sand text-stone hover:bg-cream/40'
-                              }`}
-                            >
-                              <Sliders className="w-3.5 h-3.5" />
-                              <span>Filtrar</span>
-                              {movimientosTypeFilter !== 'todos' && (
-                                <span className="w-2 h-2 rounded-full bg-terra ml-0.5"></span>
-                              )}
-                            </button>
-
-                            {showMovimientosFilterMenu && (
-                              <>
-                                <div className="fixed inset-0 z-20" onClick={() => setShowMovimientosFilterMenu(false)} />
-                                <div className="absolute right-0 mt-1.5 w-48 bg-white border border-sand rounded-xl shadow-lg z-30 py-1 text-xs">
-                                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase text-stone tracking-wider border-b border-sand/40">
-                                    Filtrar por tipo
-                                  </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => { setMovimientosTypeFilter('todos'); setShowMovimientosFilterMenu(false); }}
-                                    className={`w-full px-3 py-2 text-left font-semibold hover:bg-cream/40 flex items-center justify-between ${movimientosTypeFilter === 'todos' ? 'text-terra font-bold' : 'text-brown'}`}
-                                  >
-                                    Todos los movimientos
-                                    {movimientosTypeFilter === 'todos' && <CheckCircle className="w-3.5 h-3.5 text-terra" />}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => { setMovimientosTypeFilter('ingresos'); setShowMovimientosFilterMenu(false); }}
-                                    className={`w-full px-3 py-2 text-left font-semibold hover:bg-cream/40 flex items-center justify-between ${movimientosTypeFilter === 'ingresos' ? 'text-emerald-700 font-bold' : 'text-brown'}`}
-                                  >
-                                    Solo Ingresos (+)
-                                    {movimientosTypeFilter === 'ingresos' && <CheckCircle className="w-3.5 h-3.5 text-emerald-700" />}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => { setMovimientosTypeFilter('egresos'); setShowMovimientosFilterMenu(false); }}
-                                    className={`w-full px-3 py-2 text-left font-semibold hover:bg-cream/40 flex items-center justify-between ${movimientosTypeFilter === 'egresos' ? 'text-rose-700 font-bold' : 'text-brown'}`}
-                                  >
-                                    Solo Egresos (-)
-                                    {movimientosTypeFilter === 'egresos' && <CheckCircle className="w-3.5 h-3.5 text-rose-700" />}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => { setMovimientosTypeFilter('pendientes'); setShowMovimientosFilterMenu(false); }}
-                                    className={`w-full px-3 py-2 text-left font-semibold hover:bg-cream/40 flex items-center justify-between ${movimientosTypeFilter === 'pendientes' ? 'text-amber-700 font-bold' : 'text-brown'}`}
-                                  >
-                                    Solo Pendientes
-                                    {movimientosTypeFilter === 'pendientes' && <CheckCircle className="w-3.5 h-3.5 text-amber-700" />}
-                                  </button>
-                                </div>
-                              </>
-                            )}
-                          </div>
-
-                          {/* Botón Exportar */}
-                          <button
-                            type="button"
-                            onClick={() => exportToCSV('payments', filteredPayments, filteredFixedCosts, totalVentas, totalCostoVariable, totalCostoFijo)}
-                            className="px-3 py-1.5 border border-sand text-stone hover:text-brown hover:bg-cream/40 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
-                            title="Exportar a CSV / Excel"
-                          >
-                            <Download className="w-3.5 h-3.5" />
-                            <span>Exportar</span>
-                          </button>
-
-                          {/* Buscador */}
-                          <div className="relative w-44 sm:w-56">
-                            <Search className="w-3.5 h-3.5 text-stone absolute left-3 top-1/2 -translate-y-1/2" />
-                            <input
-                              type="text"
-                              placeholder="Buscar..."
-                              value={movimientosSearch}
-                              onChange={(e) => setMovimientosSearch(e.target.value)}
-                              className="w-full pl-8 pr-7 py-1.5 bg-cream/30 border border-sand rounded-xl text-xs text-brown focus:ring-2 focus:ring-terra/30 focus:bg-white transition-all outline-none"
-                            />
-                            {movimientosSearch && (
-                              <button
-                                type="button"
-                                onClick={() => setMovimientosSearch('')}
-                                className="absolute right-2 top-1/2 -translate-y-1/2 text-stone hover:text-brown cursor-pointer"
-                              >
-                                <X className="w-3 h-3" />
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="overflow-x-auto overflow-y-visible">
-                        <table className="w-full text-left border-collapse min-w-[760px]">
-                          <thead>
-                            <tr className="bg-light-cream/60 text-stone text-[11px] font-bold uppercase tracking-wider border-b border-sand">
-                              <th className="py-3 px-4 w-28">Fecha</th>
-                              <th className="py-3 px-4">Descripción</th>
-                              <th className="py-3 px-4">Categoría</th>
-                              <th className="py-3 px-4">Cuenta</th>
-                              <th className="py-3 px-4">Tipo</th>
-                              <th className="py-3 px-4 text-right">Monto</th>
-                              <th className="py-3 px-3 text-center w-12"></th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-sand/40 text-xs">
-                            {filteredMovements.length === 0 ? (
-                              <tr>
-                                <td colSpan={7} className="py-12 text-center text-stone">
-                                  <FileText className="w-8 h-8 text-stone/40 mx-auto mb-2" />
-                                  <p className="font-bold">No se encontraron asientos contables</p>
-                                  <p className="text-[11px] text-stone/80 mt-1">Probá cambiando el texto de búsqueda o los filtros superiores.</p>
-                                </td>
-                              </tr>
-                            ) : (
-                              filteredMovements.map((m) => {
-                                const isIngreso = m.rawType === 'ingreso';
-                                const mKey = `${m.codigo}-${m.originalId}`;
-                                const isMenuOpen = activeMovementMenuId === mKey;
-                                
-                                // Date formatting
-                                let dateDayMonth = '—';
-                                let dateYear = '';
-                                if (m.fecha && m.fecha !== '—') {
-                                  try {
-                                    const d = new Date(m.fecha.includes('T') ? m.fecha : `${m.fecha}T12:00:00`);
-                                    if (!isNaN(d.getTime())) {
-                                      const monthNames = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
-                                      dateDayMonth = `${d.getDate()} ${monthNames[d.getMonth()]}`;
-                                      dateYear = `${d.getFullYear()}`;
-                                    } else {
-                                      dateDayMonth = m.fecha;
-                                    }
-                                  } catch (e) {
-                                    dateDayMonth = m.fecha;
-                                  }
-                                }
-
-                                // Type pill formatting
-                                const isPending = m.estado === 'Pendiente';
-                                const isTransfer = (m.subCategoria && m.subCategoria.toLowerCase().includes('transferencia')) ||
-                                                  (m.operacion && m.operacion.toLowerCase().includes('transferencia'));
-
-                                let typeLabel = isIngreso ? 'Ingreso' : 'Egreso';
-                                let typeClass = isIngreso ? 'bg-emerald-100/70 text-emerald-800 border border-emerald-200/60' : 'bg-rose-100/70 text-rose-800 border border-rose-200/60';
-
-                                if (isTransfer) {
-                                  typeLabel = isIngreso ? 'Transferencia Entrante' : 'Transferencia Saliente';
-                                  typeClass = 'bg-purple-100/70 text-purple-700 border border-purple-200/60';
-                                } else if (isPending) {
-                                  typeLabel = 'Pendiente';
-                                  typeClass = 'bg-amber-100/80 text-amber-800 border border-amber-300/80';
-                                } else if (isIngreso) {
-                                  if (m.subCategoria === 'Saldo' || m.operacion?.includes('Saldo')) typeLabel = 'Cobro Saldo';
-                                  else if (m.subCategoria === 'Seña' || m.operacion?.includes('Seña')) typeLabel = 'Seña Anticipo';
-                                }
-
-                                return (
-                                  <tr
-                                    key={mKey}
-                                    onClick={() => setSelectedTransactionDetail(m)}
-                                    className="hover:bg-cream/40 transition-colors group cursor-pointer"
-                                    title="Clic para ver detalle de la transacción"
-                                  >
-                                    {/* 1. FECHA */}
-                                    <td className="py-3.5 px-4 whitespace-nowrap align-middle">
-                                      <div className="font-bold text-brown text-xs">{dateDayMonth}</div>
-                                      {dateYear && <div className="text-[11px] text-stone font-normal">{dateYear}</div>}
-                                    </td>
-
-                                    {/* 2. DESCRIPCIÓN */}
-                                    <td className="py-3.5 px-4 align-middle">
-                                      <div className="flex items-center gap-3">
-                                        <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold shrink-0 ${
-                                          isIngreso ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
-                                        }`}>
-                                          {isIngreso ? '+' : '-'}
-                                        </span>
-                                        <div className="min-w-0 max-w-[280px]">
-                                          <div className="font-bold text-brown text-xs truncate" title={m.operacion || m.descripcion}>
-                                            {m.operacion || m.descripcion || m.entidad}
-                                          </div>
-                                          <div className="flex items-center gap-1.5 mt-0.5">
-                                            {m.entidad && (
-                                              <span className="px-1.5 py-0.5 text-[10px] font-medium bg-sand/30 text-stone rounded truncate max-w-[150px]">
-                                                {m.entidad}
-                                              </span>
-                                            )}
-                                            {m.codigo && (
-                                              <span className="text-[10px] font-mono text-stone/70">
-                                                #{m.codigo}
-                                              </span>
-                                            )}
-                                          </div>
-                                        </div>
-                                      </div>
-                                    </td>
-
-                                    {/* 3. CATEGORÍA */}
-                                    <td className="py-3.5 px-4 whitespace-nowrap align-middle">
-                                      <span className="px-2.5 py-1 bg-light-cream border border-sand/60 text-stone rounded-lg font-medium text-[11px] inline-block max-w-[160px] truncate" title={m.subCategoria || m.categoria}>
-                                        {m.subCategoria || m.categoria || 'General'}
-                                      </span>
-                                    </td>
-
-                                    {/* 4. CUENTA */}
-                                    <td className="py-3.5 px-4 whitespace-nowrap align-middle text-brown font-medium text-xs">
-                                      {m.medio || m.cuenta || 'Efectivo'}
-                                    </td>
-
-                                    {/* 5. TIPO */}
-                                    <td className="py-3.5 px-4 whitespace-nowrap align-middle">
-                                      <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold inline-block ${typeClass}`}>
-                                        {typeLabel}
-                                      </span>
-                                    </td>
-
-                                    {/* 6. MONTO */}
-                                    <td className={`py-3.5 px-4 text-right font-mono font-bold text-sm whitespace-nowrap align-middle ${
-                                      isIngreso ? 'text-emerald-700' : 'text-rose-700'
-                                    }`}>
-                                      {isIngreso ? '+' : '-'}{fmt(m.monto)}
-                                    </td>
-
-                                    {/* 7. ACCIONES (3 PUNTITOS) */}
-                                    <td className="py-3.5 px-3 text-center whitespace-nowrap align-middle relative" onClick={(e) => e.stopPropagation()}>
-                                      <div className="relative inline-block text-left">
-                                        <button
-                                          type="button"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            setActiveMovementMenuId(isMenuOpen ? null : mKey);
-                                          }}
-                                          title="Opciones del movimiento"
-                                          className={`p-1.5 rounded-lg transition-all cursor-pointer ${
-                                            isMenuOpen
-                                              ? 'bg-brown text-cream shadow-xs'
-                                              : 'text-stone hover:text-brown hover:bg-sand/40'
-                                          }`}
-                                        >
-                                          <MoreVertical className="w-4 h-4" />
-                                        </button>
-
-                                        {/* DROPDOWN MENU */}
-                                        {isMenuOpen && (
-                                          <>
-                                            {/* Backdrop click to close */}
-                                            <div
-                                              className="fixed inset-0 z-30"
-                                              onClick={(e) => {
-                                                e.stopPropagation();
-                                                setActiveMovementMenuId(null);
-                                              }}
-                                            />
-                                            <div className="absolute right-0 mt-1.5 w-44 bg-white border border-sand rounded-xl shadow-lg z-40 py-1 overflow-hidden animate-in fade-in zoom-in-95 duration-100">
-                                              <button
-                                                type="button"
-                                                onClick={(e) => {
-                                                  e.stopPropagation();
-                                                  setActiveMovementMenuId(null);
-                                                  setSelectedTransactionDetail(m);
-                                                }}
-                                                className="w-full px-3.5 py-2 text-left text-xs font-semibold text-brown hover:bg-cream/50 flex items-center gap-2.5 transition-colors cursor-pointer"
-                                              >
-                                                <Eye className="w-4 h-4 text-terra" />
-                                                Ver detalle
-                                              </button>
-
-                                              {canEditFinanzas && (
-                                                <>
-                                                  <button
-                                                    type="button"
-                                                    onClick={(e) => {
-                                                      e.stopPropagation();
-                                                      setActiveMovementMenuId(null);
-                                                      openEditMovement(m);
-                                                    }}
-                                                    className="w-full px-3.5 py-2 text-left text-xs font-semibold text-brown hover:bg-cream/50 flex items-center gap-2.5 transition-colors cursor-pointer"
-                                                  >
-                                                    <Edit2 className="w-4 h-4 text-brown" />
-                                                    Editar movimiento
-                                                  </button>
-                                                  <div className="my-1 border-t border-sand/40" />
-                                                  <button
-                                                    type="button"
-                                                    onClick={(e) => {
-                                                      e.stopPropagation();
-                                                      setActiveMovementMenuId(null);
-                                                      deleteMovementItem(m);
-                                                    }}
-                                                    className="w-full px-3.5 py-2 text-left text-xs font-semibold text-rose-600 hover:bg-rose-50 flex items-center gap-2.5 transition-colors cursor-pointer"
-                                                  >
-                                                    <Trash2 className="w-4 h-4 text-rose-600" />
-                                                    Eliminar
-                                                  </button>
-                                                </>
-                                              )}
-                                            </div>
-                                          </>
-                                        )}
-                                      </div>
-                                    </td>
-                                  </tr>
-                                );
-                              })
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })()}
-
-              {/* MODALES DE DETALLE / POP-UPS DE TESORERÍA & FINANZAS */}
+              {/* DASHBOARD DRILL-DOWN MODALS */}
               <DashboardModals
-                isOpen={activeTesoreriaModal !== null}
-                onClose={() => setActiveTesoreriaModal(null)}
                 modalType={activeTesoreriaModal}
+                onClose={() => setActiveTesoreriaModal(null)}
                 fmt={fmt}
-                selectedPeriodDescription={`${MONTHS_LIST.find(m => m.value === finanzasMonth)?.label || 'Todos los Meses'} ${finanzasYear === 'todos' ? '(Histórico)' : finanzasYear}`}
                 filteredSales={filteredSalesForFinances}
                 allSales={sales}
                 filteredFixedCosts={filteredFixedCosts}
                 allFixedCosts={fixedCosts}
                 paymentsLedger={paymentsLedger}
+                resumenYear={finanzasYear}
+                resumenMonth={finanzasMonth}
                 totalVentas={totalVentas}
-                totalCostoVentas={totalCostoVariable}
                 totalGastosFijos={totalCostoFijo}
-                resultadoNeto={utilidadOperativaDevengada}
-                cantidadVentas={filteredSalesForFinances.length}
-                ventaPromedio={filteredSalesForFinances.length > 0 ? Math.round(totalVentas / filteredSalesForFinances.length) : 0}
-                totalSaldosPendientes={totalSaldosPendientes}
-                ordersWithBalance={ordersWithBalance}
-                accountBalances={accountBalances}
-                flujoNetoDeCaja={flujoNetoDeCaja}
-                totalIngresosCobrados={totalIngresosCobrados}
-                totalCostoFijo={totalCostoFijo}
-                fixedCosts={fixedCosts}
+                totalVentasACobrar={totalSaldosPendientes}
               />
-
-              {/* MODAL DE DETALLE INDIVIDUAL DE MOVIMIENTO / GASTO / COBRO */}
-              <TransactionDetailModal
-                isOpen={selectedTransactionDetail !== null}
-                onClose={() => setSelectedTransactionDetail(null)}
-                transaction={selectedTransactionDetail}
-                fmt={fmt}
-                onEdit={(item) => {
-                  setSelectedTransactionDetail(null);
-                  openEditMovement(item);
-                }}
-                onDelete={(item) => {
-                  setSelectedTransactionDetail(null);
-                  deleteMovementItem(item);
-                }}
-                onToggleStatus={(item) => {
-                  toggleMovementStatus(item);
-                }}
-                onViewOrder={(orderIdOrNum) => {
-                  const found = sales.find(s => String(s.id) === String(orderIdOrNum) || String(s.orderNum) === String(orderIdOrNum));
-                  if (found) {
-                    setSelectedSaleDetail(found);
-                  } else {
-                    setActiveTab('ventas');
-                    setVentasSubTab('ventas');
-                    setSalesSearch(String(orderIdOrNum));
-                  }
-                }}
-                canEdit={canEditFinanzas}
-              />
-
             </div>
           );
         })()}
+
+        {/* TAB: STOCK */}
+        {activeTab === 'stock' && (
+          <StockManager
+            stockList={stockList}
+            stockMovements={stockMovements}
+            onAddStockItem={handleAddStockItem}
+            onUpdateStockItem={handleUpdateStockItem}
+            onDeleteStockItem={handleDeleteStockItem}
+            onAdjustStockQty={handleAdjustStockQty}
+            fmt={fmt}
+            canEdit={currentUser.permissions.stock?.edit ?? true}
+          />
+        )}
       </main>
 
-      {/* MODAL DE DETALLE INDIVIDUAL DE PEDIDO / VENTA */}
+      {/* SALE DETAIL MODAL */}
       <SaleDetailModal
-        isOpen={selectedSaleDetail !== null}
+        isOpen={Boolean(selectedSaleDetail)}
         onClose={() => setSelectedSaleDetail(null)}
         sale={selectedSaleDetail}
         fmt={fmt}
         fmtDate={fmtDate}
         canEdit={canEditVentas}
-        onEdit={(saleToEdit) => {
-          setSelectedSaleDetail(null);
+        onEdit={(sale) => {
           setEditingSale({
-            ...saleToEdit,
-            items: saleToEdit.items ? saleToEdit.items.map((it: any) => ({ ...it })) : [],
-            client: { ...saleToEdit.client },
-            attachments: saleToEdit.attachments ? [...saleToEdit.attachments] : []
+            ...sale,
+            items: sale.items ? sale.items.map((it: any) => ({ ...it })) : [],
+            client: { ...sale.client },
+            attachments: sale.attachments ? [...sale.attachments] : []
           });
+          setSelectedSaleDetail(null);
         }}
         onDelete={(saleId) => {
-          setSelectedSaleDetail(null);
           deleteOrder(saleId);
+          setSelectedSaleDetail(null);
         }}
-        onUpdateStatus={(saleId, field, val) => {
-          updateOrderStatus(saleId, field, val);
-          if (selectedSaleDetail && String(selectedSaleDetail.id) === String(saleId)) {
-            setSelectedSaleDetail((prev: any) => prev ? { ...prev, [field]: val } : null);
+        onUpdateStatus={(saleId, field, value) => {
+          const updated = sales.map(s => {
+            if (s.id === saleId) {
+              return { ...s, [field]: value };
+            }
+            return s;
+          });
+          setSales(updated);
+          localStorage.setItem('barda_sales_orders', JSON.stringify(updated));
+          const target = updated.find(s => s.id === saleId);
+          if (target) {
+            saveFirestoreDocument('barda_sales_orders', String(saleId), target);
+            if (selectedSaleDetail && selectedSaleDetail.id === saleId) {
+              setSelectedSaleDetail(target);
+            }
           }
         }}
         onGenerateRemito={(sale) => {
-          setSelectedSaleDetail(null);
           setRemitoCliente({
             nombre: sale.client?.nombre || '',
             telefono: sale.client?.telefono || '',
@@ -9928,27 +9933,27 @@ export default function App() {
             ciudad: sale.client?.ciudad || '',
             provincia: sale.client?.provincia || ''
           });
-          setRemitoNumero(sale.orderNum ? sale.orderNum.replace('PE-', '').replace('PED-', '') : '');
+          setRemitoNumero(sale.orderNum ? sale.orderNum.replace('PE-', '') : '');
           setRemitoFecha(new Date().toISOString().split('T')[0]);
           setRemitoDeliveryDate(sale.deliveryDate || new Date().toISOString().split('T')[0]);
           setRemitoItems((sale.items || []).map((it: any) => ({
             id: Date.now() + Math.random(),
-            name: it.name,
-            detail: it.detail,
-            unitPrice: it.unitPrice,
-            qty: it.qty || it.quantity || 1,
-            category: it.category
+            name: it.name || it.nombre,
+            detail: it.detail || it.medidas || '',
+            unitPrice: it.unitPrice || it.precioUnitario || 0,
+            qty: it.qty || it.cant || 1,
+            category: it.category || it.cat || 'Otros'
           })));
+          setSelectedSaleDetail(null);
           setActiveTab('ventas');
           setVentasSubTab('remitos');
         }}
         onSendToTaller={(sale) => {
-          setSelectedSaleDetail(null);
           handleSendToTaller(sale);
+          setSelectedSaleDetail(null);
         }}
         onRegisterPayment={(sale) => {
-          setSelectedSaleDetail(null);
-          const remaining = sale.total - (sale.senaAmount || 0);
+          const remaining = Math.max(0, (sale.total || 0) - (sale.senaAmount || 0));
           setPaymentRegisterForm({
             orderId: sale.id,
             amount: String(remaining),
@@ -9959,1508 +9964,79 @@ export default function App() {
             date: new Date().toISOString().split('T')[0],
             note: `Cobro saldo pedido ${sale.orderNum}`
           });
+          setSelectedSaleDetail(null);
           setActiveTab('finanzas');
           setTesoreriaSubTab('ingresos');
         }}
-        onPreviewImage={(p) => setPreviewImage(p)}
+        onPreviewImage={(preview) => setPreviewImage(preview)}
       />
 
-      {/* EDIT SALE MODAL OVERLAY */}
-      {editingSale && (
-        <div className="fixed inset-0 bg-brown/50 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-fadeIn">
-          <div className="bg-white border border-sand rounded-2xl max-w-3xl w-full p-6 shadow-2xl flex flex-col gap-5 max-h-[92vh] overflow-y-auto font-sans">
-            
-            {/* MODAL HEADER */}
-            <div className="border-b border-sand pb-3 flex justify-between items-center">
-              <div>
-                <h2 className="font-serif text-lg font-bold text-brown flex items-center gap-2">
-                  <Pencil className="w-5 h-5 text-terra" />
-                  <span>Editar Venta & Productos</span>
-                  <span className="font-mono text-xs text-terra bg-amber-50 px-2.5 py-0.5 rounded-full border border-sand font-bold">
-                    {editingSale.orderNum}
-                  </span>
-                </h2>
-                <p className="text-xs text-stone mt-0.5">
-                  Modificá productos línea por línea, agregá nuevos ítems, ajustá costos, precios y datos del pedido.
-                </p>
-              </div>
-              <button 
-                onClick={() => setEditingSale(null)}
-                className="p-1.5 rounded-xl hover:bg-sand/40 text-stone hover:text-brown transition-colors cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="flex flex-col gap-5">
-
-              {/* CLIENT & GENERAL DATA */}
-              <div className="bg-light-cream/30 border border-sand rounded-xl p-4 flex flex-col gap-3">
-                <h4 className="text-[10px] uppercase font-bold text-stone tracking-wider border-b border-sand pb-1 flex items-center gap-1.5">
-                  <UserIcon className="w-3.5 h-3.5 text-terra" /> Datos del Cliente & Contacto
-                </h4>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[10px] font-bold uppercase text-stone">Nombre del Cliente</label>
-                    <input
-                      type="text"
-                      value={editingSale.client?.nombre || ''}
-                      onChange={(e) => setEditingSale({
-                        ...editingSale,
-                        client: { ...editingSale.client, nombre: e.target.value }
-                      })}
-                      placeholder="Nombre y Apellido"
-                      className="p-2 border border-sand rounded-lg text-xs bg-white text-brown font-semibold focus:ring-1 focus:ring-terra focus:outline-none"
-                    />
-                  </div>
-
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[10px] font-bold uppercase text-stone">Teléfono / WhatsApp</label>
-                    <input
-                      type="text"
-                      value={editingSale.client?.telefono || ''}
-                      onChange={(e) => setEditingSale({
-                        ...editingSale,
-                        client: { ...editingSale.client, telefono: e.target.value }
-                      })}
-                      placeholder="ej. +54 9 11 1234-5678"
-                      className="p-2 border border-sand rounded-lg text-xs bg-white text-brown focus:ring-1 focus:ring-terra focus:outline-none"
-                    />
-                  </div>
-
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[10px] font-bold uppercase text-stone">Dirección / Localidad</label>
-                    <input
-                      type="text"
-                      value={editingSale.client?.direccion || ''}
-                      onChange={(e) => setEditingSale({
-                        ...editingSale,
-                        client: { ...editingSale.client, direccion: e.target.value }
-                      })}
-                      placeholder="Calle, Número, Ciudad"
-                      className="p-2 border border-sand rounded-lg text-xs bg-white text-brown focus:ring-1 focus:ring-terra focus:outline-none"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* PRODUCTS LINE BY LINE (CRUD) */}
-              <div className="bg-white border border-sand rounded-xl p-4 flex flex-col gap-3">
-                <div className="flex items-center justify-between border-b border-sand pb-2">
-                  <div className="flex items-center gap-2">
-                    <ShoppingBag className="w-4 h-4 text-terra" />
-                    <h4 className="text-xs uppercase font-bold text-brown tracking-wider">
-                      Productos y Líneas de Pedido
-                    </h4>
-                    <span className="text-[10px] font-bold text-stone bg-light-cream px-2 py-0.5 rounded-full border border-sand">
-                      {editingSale.items?.length || 0} {editingSale.items?.length === 1 ? 'producto' : 'productos'}
-                    </span>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={handleAddItemToEditingSale}
-                    className="px-3 py-1.5 bg-terra text-white hover:bg-brown rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Agregar Producto</span>
-                  </button>
-                </div>
-
-                {(!editingSale.items || editingSale.items.length === 0) ? (
-                  <div className="p-6 text-center text-stone italic text-xs bg-light-cream/20 rounded-xl border border-dashed border-sand">
-                    No hay productos cargados en esta orden. Hacé clic en "+ Agregar Producto" para crear uno.
-                  </div>
-                ) : (
-                  <div className="flex flex-col gap-3 max-h-80 overflow-y-auto pr-1">
-                    {editingSale.items.map((item: any, idx: number) => {
-                      const itemQty = Number(item.qty ?? item.cant ?? 1) || 1;
-                      const itemPrice = Number(item.unitPrice ?? item.precioUnitario ?? 0) || 0;
-                      const itemCost = Number(item.cost ?? item.costoUnitario ?? item.costo ?? 0) || 0;
-                      const lineTotal = itemPrice * itemQty;
-                      const lineCost = itemCost * itemQty;
-                      const lineProfit = Math.max(0, lineTotal - lineCost);
-
-                      return (
-                        <div 
-                          key={item.id || idx} 
-                          className="bg-light-cream/30 border border-sand/70 rounded-xl p-3.5 flex flex-col gap-2.5 relative group hover:border-sand transition-all"
-                        >
-                          {/* Row Top: Cantidad, Nombre, Categoría, Delete */}
-                          <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center">
-                            {/* Cantidad */}
-                            <div className="sm:col-span-2 flex flex-col gap-0.5">
-                              <label className="text-[9px] uppercase font-bold text-stone">Cant.</label>
-                              <input
-                                type="number"
-                                min={1}
-                                value={itemQty}
-                                onChange={(e) => handleUpdateEditingSaleItem(idx, 'qty', e.target.value)}
-                                className="w-full p-1.5 border border-sand rounded-lg text-xs font-bold text-center bg-white text-brown focus:ring-1 focus:ring-terra focus:outline-none"
-                              />
-                            </div>
-
-                            {/* Nombre del Producto */}
-                            <div className="sm:col-span-6 flex flex-col gap-0.5">
-                              <label className="text-[9px] uppercase font-bold text-stone">Producto / Modelo</label>
-                              <input
-                                type="text"
-                                value={item.name || item.nombre || ''}
-                                onChange={(e) => handleUpdateEditingSaleItem(idx, 'name', e.target.value)}
-                                placeholder="ej. Mesa Paraíso Enchapada"
-                                className="w-full p-1.5 border border-sand rounded-lg text-xs font-bold bg-white text-brown focus:ring-1 focus:ring-terra focus:outline-none"
-                              />
-                            </div>
-
-                            {/* Categoría */}
-                            <div className="sm:col-span-3 flex flex-col gap-0.5">
-                              <label className="text-[9px] uppercase font-bold text-stone">Categoría</label>
-                              <select
-                                value={item.category || item.cat || 'Mesas'}
-                                onChange={(e) => handleUpdateEditingSaleItem(idx, 'category', e.target.value)}
-                                className="w-full p-1.5 border border-sand rounded-lg text-xs font-semibold bg-white text-brown focus:ring-1 focus:ring-terra focus:outline-none cursor-pointer"
-                              >
-                                <option value="Mesas">Mesas</option>
-                                <option value="Sillas">Sillas</option>
-                                <option value="Sillones">Sillones</option>
-                                <option value="Banquetas">Banquetas</option>
-                                <option value="Camas">Camas</option>
-                                <option value="Muebles TV">Muebles TV</option>
-                                <option value="Espejos">Espejos</option>
-                                <option value="Otros">Otros</option>
-                              </select>
-                            </div>
-
-                            {/* Delete Button */}
-                            <div className="sm:col-span-1 flex justify-end items-end pt-3 sm:pt-0">
-                              <button
-                                type="button"
-                                onClick={() => handleRemoveEditingSaleItem(idx)}
-                                className="p-1.5 text-stone hover:text-error hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                                title="Eliminar este producto"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </div>
-
-                          {/* Row Middle: Medidas / Lustre / Detalle */}
-                          <div className="flex flex-col gap-0.5">
-                            <label className="text-[9px] uppercase font-bold text-stone">Detalle / Medidas / Lustre / Tapizado</label>
-                            <input
-                              type="text"
-                              value={item.detail || item.medidas || ''}
-                              onChange={(e) => handleUpdateEditingSaleItem(idx, 'detail', e.target.value)}
-                              placeholder="ej. 1.80 x 0.90 x 0.77m - Lustre Petiribí Natural - Base Negra"
-                              className="w-full p-1.5 border border-sand/70 rounded-lg text-xs bg-white text-stone focus:ring-1 focus:ring-terra focus:outline-none"
-                            />
-                          </div>
-
-                          {/* Row Bottom: Precios, Costos y Subtotal de Línea */}
-                          <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-sand/40 bg-white/60 -mx-3.5 -mb-3.5 p-2.5 rounded-b-xl">
-                            <div className="flex flex-wrap items-center gap-3">
-                              {/* Precio Unitario */}
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-[10px] uppercase font-bold text-stone">Precio U.:</span>
-                                <div className="relative">
-                                  <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-stone font-bold">$</span>
-                                  <input
-                                    type="number"
-                                    min={0}
-                                    value={itemPrice}
-                                    onChange={(e) => handleUpdateEditingSaleItem(idx, 'unitPrice', e.target.value)}
-                                    className="w-24 pl-5 pr-2 py-1 border border-sand rounded-md text-xs font-mono font-bold text-brown bg-white text-right focus:ring-1 focus:ring-terra focus:outline-none"
-                                  />
-                                </div>
-                              </div>
-
-                              {/* Costo Unitario */}
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-[10px] uppercase font-bold text-stone">Costo U.:</span>
-                                <div className="relative">
-                                  <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-stone font-bold">$</span>
-                                  <input
-                                    type="number"
-                                    min={0}
-                                    value={itemCost}
-                                    onChange={(e) => handleUpdateEditingSaleItem(idx, 'cost', e.target.value)}
-                                    className="w-24 pl-5 pr-2 py-1 border border-sand rounded-md text-xs font-mono font-bold text-amber-900 bg-white text-right focus:ring-1 focus:ring-terra focus:outline-none"
-                                  />
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Subtotales calculados */}
-                            <div className="flex items-center gap-3 text-xs font-mono font-bold">
-                              <div className="text-stone">
-                                Costo: <span className="text-amber-900">{fmt(lineCost)}</span>
-                              </div>
-                              <div className="text-brown">
-                                Subtotal: <span className="text-brown">{fmt(lineTotal)}</span>
-                              </div>
-                              <div className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px]">
-                                Ganancia: {fmt(lineProfit)}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {/* FINANCIAL TOTALS SUMMARY */}
-              <div className="bg-amber-50/25 border border-sand rounded-xl p-4 flex flex-col gap-3">
-                <h4 className="text-[10px] uppercase font-bold text-stone tracking-wider border-b border-sand pb-1 flex items-center justify-between">
-                  <span>Resumen Financiero Total de la Venta</span>
-                  <span className="text-[9px] font-normal text-stone">Calculado automáticamente de los productos o editable</span>
-                </h4>
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[10px] font-bold uppercase text-brown">Precio Venta Total (AR$)</label>
-                    <input
-                      type="number"
-                      value={editingSale.total ?? 0}
-                      onChange={(e) => setEditingSale({ ...editingSale, total: Math.max(0, parseFloat(e.target.value) || 0) })}
-                      className="p-2 border border-sand rounded-lg text-xs font-bold font-mono text-brown bg-white focus:ring-1 focus:ring-terra focus:outline-none"
-                    />
-                  </div>
-
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[10px] font-bold uppercase text-amber-900">Costo Total Estimado (AR$)</label>
-                    <input
-                      type="number"
-                      value={editingSale.totalCost ?? 0}
-                      onChange={(e) => setEditingSale({ ...editingSale, totalCost: Math.max(0, parseFloat(e.target.value) || 0) })}
-                      className="p-2 border border-sand rounded-lg text-xs font-bold font-mono text-amber-900 bg-white focus:ring-1 focus:ring-terra focus:outline-none"
-                    />
-                  </div>
-
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[10px] font-bold uppercase text-stone">Seña Abonada (AR$)</label>
-                    <input
-                      type="number"
-                      value={editingSale.senaAmount ?? 0}
-                      onChange={(e) => setEditingSale({ ...editingSale, senaAmount: Math.max(0, parseFloat(e.target.value) || 0) })}
-                      className="p-2 border border-sand rounded-lg text-xs font-bold font-mono text-stone bg-white focus:ring-1 focus:ring-terra focus:outline-none"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap justify-between items-center text-xs font-bold pt-2 border-t border-sand/40 gap-2">
-                  <div className="flex items-center gap-2">
-                    <span className="text-stone">Saldo Pendiente de Cobro:</span>
-                    <span className="text-terra font-mono text-sm">
-                      {fmt(Math.max(0, (editingSale.total || 0) - (editingSale.senaAmount || 0)))}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-stone">Ganancia Estimada:</span>
-                    <span className="text-emerald-700 font-mono text-sm">
-                      {fmt(Math.max(0, (editingSale.total || 0) - (editingSale.totalCost || 0)))}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* DELIVERY, PAYMENT STATUS & NOTES */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="flex flex-col gap-1">
-                  <label className="text-[10px] uppercase font-bold text-stone">Fecha de Entrega</label>
-                  <input
-                    type="text"
-                    value={editingSale.deliveryDate || ''}
-                    onChange={(e) => setEditingSale({ ...editingSale, deliveryDate: e.target.value })}
-                    placeholder="ej. 15 de Septiembre de 2026"
-                    className="p-2 border border-sand rounded-lg text-xs bg-white focus:ring-1 focus:ring-terra focus:outline-none"
-                  />
-                </div>
-
-                <div className="flex flex-col gap-1">
-                  <label className="text-[10px] uppercase font-bold text-stone">Estado de Entrega</label>
-                  <select
-                    value={editingSale.status || 'Pendiente'}
-                    onChange={(e) => setEditingSale({ ...editingSale, status: e.target.value })}
-                    className="p-2 border border-sand rounded-lg text-xs bg-white font-semibold text-brown cursor-pointer"
-                  >
-                    <option value="Pendiente">Pendiente</option>
-                    <option value="En Producción">En Producción</option>
-                    <option value="Listo para Entrega">Listo para Entrega</option>
-                    <option value="Entregado">Entregado</option>
-                  </select>
-                </div>
-
-                <div className="flex flex-col gap-1">
-                  <label className="text-[10px] uppercase font-bold text-stone">Estado de Pago</label>
-                  <select
-                    value={editingSale.paymentStatus || 'Señado'}
-                    onChange={(e) => setEditingSale({ ...editingSale, paymentStatus: e.target.value })}
-                    className="p-2 border border-sand rounded-lg text-xs bg-white font-semibold text-brown cursor-pointer"
-                  >
-                    <option value="Pendiente">Pendiente</option>
-                    <option value="Señado">Señado (Seña abonada)</option>
-                    <option value="Pagado">Pagado Completo</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="flex flex-col gap-1">
-                <label className="text-[10px] uppercase font-bold text-stone">Notas Especiales / Observaciones</label>
-                <textarea
-                  rows={2}
-                  value={editingSale.notes || ''}
-                  onChange={(e) => setEditingSale({ ...editingSale, notes: e.target.value })}
-                  placeholder="Instrucciones especiales de lustre, telas, envío, transporte..."
-                  className="w-full p-2 border border-sand rounded-lg text-xs bg-white focus:ring-1 focus:ring-terra focus:outline-none"
-                />
-              </div>
-
-              {/* ATTACHMENTS / PLANOS / FOTOS */}
-              <div className="flex flex-col gap-2 pt-2 border-t border-sand/60">
-                <label className="text-[10px] uppercase font-bold text-stone flex items-center justify-between">
-                  <span className="flex items-center gap-1.5">
-                    <Paperclip className="w-3.5 h-3.5 text-terra" />
-                    Adjuntar / Editar Fotos y Planos
-                  </span>
-                  <span className="text-[9px] font-normal text-stone">({editingSale.attachments?.length || 0} adjuntos)</span>
-                </label>
-                
-                <div className="border border-dashed border-sand hover:border-terra bg-light-cream/30 rounded-xl p-3.5 flex flex-col items-center justify-center gap-1.5 cursor-pointer transition-all relative">
-                  <input
-                    type="file"
-                    multiple
-                    accept="image/*,.pdf,.doc,.docx"
-                    onChange={(e) => {
-                      processFilesToAttachments(
-                        e.target.files,
-                        editingSale.attachments || [],
-                        (updated) => setEditingSale((prev: any) => ({ ...prev, attachments: updated }))
-                      );
-                      e.target.value = '';
-                    }}
-                    className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                  />
-                  <div className="flex items-center gap-1.5 text-terra font-bold text-xs">
-                    <Upload className="w-4 h-4" />
-                    <span>Subir o agregar más fotos / planos / comprobantes</span>
-                  </div>
-                </div>
-
-                {editingSale.attachments && editingSale.attachments.length > 0 && (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-1">
-                    {editingSale.attachments.map((att: any) => {
-                      const isImg = att.type?.startsWith('image/') || att.dataUrl?.startsWith('data:image/');
-                      return (
-                        <div key={att.id} className="relative group bg-white border border-sand rounded-lg p-1.5 flex items-center gap-2 overflow-hidden shadow-2xs">
-                          {isImg ? (
-                            <img
-                              src={att.dataUrl}
-                              alt={att.name}
-                              onClick={() => setPreviewImage({ url: att.dataUrl, name: att.name })}
-                              className="w-10 h-10 object-cover rounded shrink-0 border border-sand/40 cursor-pointer hover:opacity-80"
-                            />
-                          ) : (
-                            <div className="w-10 h-10 bg-terra/10 rounded flex items-center justify-center text-terra shrink-0">
-                              <File className="w-5 h-5" />
-                            </div>
-                          )}
-                          <div className="flex-1 min-w-0">
-                            <p className="text-[10px] font-bold text-brown truncate">{att.name}</p>
-                            {isImg && (
-                              <button
-                                type="button"
-                                onClick={() => setPreviewImage({ url: att.dataUrl, name: att.name })}
-                                className="text-[8px] font-bold text-terra hover:underline cursor-pointer"
-                              >
-                                Ver foto
-                              </button>
-                            )}
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditingSale((prev: any) => ({
-                                ...prev,
-                                attachments: (prev.attachments || []).filter((a: any) => a.id !== att.id)
-                              }));
-                            }}
-                            className="p-1 text-stone hover:text-rose-600 transition-colors cursor-pointer"
-                            title="Eliminar adjunto"
-                          >
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-            </div>
-
-            {/* MODAL FOOTER */}
-            <div className="flex gap-3 justify-end pt-3 border-t border-sand">
-              <button 
-                type="button"
-                onClick={() => setEditingSale(null)}
-                className="bg-transparent text-stone border border-sand hover:border-stone px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer"
-              >
-                Cancelar
-              </button>
-              <button 
-                type="button"
-                onClick={handleSaveEditedSale}
-                className="bg-brown text-cream px-6 py-2 rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-terra hover:text-white transition-all shadow-md cursor-pointer"
-              >
-                Guardar Cambios
-              </button>
-            </div>
-
-          </div>
-        </div>
-      )}
-
-      {/* GENERATE PURCHASE ORDER MODAL OVERLAY */}
-      {showOrderModal && (
-        <div className="fixed inset-0 bg-brown/40 backdrop-blur-xs flex items-center justify-center z-20 p-4">
-          <div className="bg-white border-2 border-sand rounded-xl max-w-lg w-full p-6 shadow-lg flex flex-col gap-5 max-h-[90vh] overflow-y-auto">
-            
-            <div className="border-b border-sand pb-3 flex justify-between items-center">
-              <h2 className="font-serif text-xl font-bold text-brown">Nueva Orden de Pedido</h2>
-              <span className="text-xs text-stone font-bold">Barda Home</span>
-            </div>
-
-            {/* Client summary info */}
-            <div className="bg-light-cream/60 border border-sand/40 rounded-lg p-3 text-xs">
-              <div><span className="text-stone font-semibold uppercase text-[9px] mr-2">Cliente:</span> <strong>{cliente.nombre || 'Consumidor Final'}</strong></div>
-              <div><span className="text-stone font-semibold uppercase text-[9px] mr-2">Fecha Entrega:</span> <strong>{calcDeliveryDate()}</strong></div>
-              <div className="border-t border-sand/40 pt-1.5 mt-1.5 flex justify-between text-brown font-bold">
-                <span>Total del Pedido:</span>
-                <span className="text-terra">{fmt(finalBudgetValue)}</span>
-              </div>
-            </div>
-
-            {/* Order spec forms */}
-            <div className="flex flex-col gap-4">
-              <div className="flex flex-col gap-1.5">
-                <label className="text-[10px] uppercase font-bold text-stone">Monto de Seña</label>
-                <div className="flex items-center gap-3 bg-light-cream/40 border border-sand p-2 rounded-lg">
-                  <div className="flex gap-1.5">
-                    {[30, 50, 100].map(pct => (
-                      <button
-                        key={pct}
-                        type="button"
-                        onClick={() => setOrderForm({ ...orderForm, senaPercent: pct, isSenaCustom: false })}
-                        className={`px-3 py-1 text-xs font-bold rounded ${!orderForm.isSenaCustom && orderForm.senaPercent === pct ? 'bg-brown text-cream' : 'bg-white text-stone border border-sand/60'}`}
-                      >
-                        {pct}%
-                      </button>
-                    ))}
-                    <button
-                      type="button"
-                      onClick={() => setOrderForm({ ...orderForm, isSenaCustom: true })}
-                      className={`px-3 py-1 text-xs font-bold rounded ${orderForm.isSenaCustom ? 'bg-brown text-cream' : 'bg-white text-stone border border-sand/60'}`}
-                    >
-                      Personalizado
-                    </button>
-                  </div>
-                  
-                  {orderForm.isSenaCustom ? (
-                    <div className="flex-1 flex items-center justify-end gap-1">
-                      <span className="text-stone text-xs font-bold">AR$</span>
-                      <input 
-                        type="number" 
-                        value={orderForm.senaCustom} 
-                        onChange={e => setOrderForm({ ...orderForm, senaCustom: Math.max(0, parseInt(e.target.value) || 0) })}
-                        className="w-24 text-right py-1 px-1.5 border border-sand rounded text-xs"
-                      />
-                    </div>
-                  ) : (
-                    <div className="flex-1 text-right font-bold text-brown text-xs">
-                      {fmt(finalBudgetValue * (orderForm.senaPercent / 100))}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] uppercase font-bold text-stone">Estado de Entrega</label>
-                  <select 
-                    value={orderForm.status} 
-                    onChange={e => setOrderForm({ ...orderForm, status: e.target.value })}
-                  >
-                    <option value="Pendiente">Pendiente</option>
-                    <option value="En Producción">En Producción</option>
-                    <option value="Listo para Entrega">Listo para Entrega</option>
-                    <option value="Entregado">Entregado</option>
-                  </select>
-                </div>
-
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] uppercase font-bold text-stone">Estado del Pago</label>
-                  <select 
-                    value={orderForm.paymentStatus} 
-                    onChange={e => setOrderForm({ ...orderForm, paymentStatus: e.target.value })}
-                  >
-                    <option value="Señado">Señado (Seña pagada)</option>
-                    <option value="Pagado">Pagado Completo</option>
-                    <option value="Pendiente">Pendiente (Sin pagar)</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="flex flex-col gap-1.5">
-                <label className="text-[10px] uppercase font-bold text-stone">Notas o Especificaciones</label>
-                <textarea 
-                  rows={2} 
-                  placeholder="Detalles de lustre de maderas, combinaciones de telas, observaciones de envío..." 
-                  value={orderForm.notes} 
-                  onChange={e => setOrderForm({ ...orderForm, notes: e.target.value })}
-                  className="w-full p-2.5 border border-sand rounded-lg text-xs"
-                />
-              </div>
-
-              {/* File Attachments */}
-              <div className="flex flex-col gap-1.5">
-                <label className="text-[10px] uppercase font-bold text-stone flex items-center justify-between">
-                  <span>Adjuntar Imágenes / Planos / Archivos</span>
-                  <span className="text-[9px] font-normal text-stone/80">(Fotos, renders, planos en PDF)</span>
-                </label>
-                
-                <div className="border border-dashed border-sand hover:border-terra bg-light-cream/30 rounded-xl p-3 flex flex-col items-center justify-center gap-2 cursor-pointer transition-all relative">
-                  <input
-                    type="file"
-                    multiple
-                    accept="image/*,.pdf,.doc,.docx"
-                    onChange={(e) => {
-                      processFilesToAttachments(
-                        e.target.files,
-                        orderForm.attachments || [],
-                        (updated) => setOrderForm(prev => ({ ...prev, attachments: updated }))
-                      );
-                      e.target.value = '';
-                    }}
-                    className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                  />
-                  <div className="flex items-center gap-2 text-terra font-bold text-xs">
-                    <Upload className="w-4 h-4" />
-                    <span>Seleccionar o arrastrar archivos</span>
-                  </div>
-                  <span className="text-[10px] text-stone">Formatos: JPG, PNG, WEBP, PDF (Máx. 8MB)</span>
-                </div>
-
-                {orderForm.attachments && orderForm.attachments.length > 0 && (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-2">
-                    {orderForm.attachments.map((att: any) => {
-                      const isImg = att.type?.startsWith('image/') || att.dataUrl?.startsWith('data:image/');
-                      return (
-                        <div key={att.id} className="relative group bg-white border border-sand rounded-lg p-1.5 flex items-center gap-2 overflow-hidden shadow-2xs">
-                          {isImg ? (
-                            <img src={att.dataUrl} alt={att.name} className="w-10 h-10 object-cover rounded shrink-0 border border-sand/40" />
-                          ) : (
-                            <div className="w-10 h-10 bg-terra/10 rounded flex items-center justify-center text-terra shrink-0">
-                              <File className="w-5 h-5" />
-                            </div>
-                          )}
-                          <div className="flex-1 min-w-0">
-                            <p className="text-[10px] font-bold text-brown truncate">{att.name}</p>
-                            <p className="text-[8px] text-stone">
-                              {att.size ? `${(att.size / 1024).toFixed(0)} KB` : 'Archivo'}
-                            </p>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setOrderForm(prev => ({
-                                ...prev,
-                                attachments: prev.attachments.filter(a => a.id !== att.id)
-                              }));
-                            }}
-                            className="p-1 text-stone hover:text-rose-600 transition-colors"
-                            title="Eliminar archivo"
-                          >
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Dialog Footer Actions */}
-            <div className="flex gap-3 justify-end pt-3 border-t border-sand">
-              <button 
-                onClick={() => setShowOrderModal(false)}
-                className="bg-transparent text-stone border border-sand hover:border-stone px-5 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all duration-150"
-              >
-                Cancelar
-              </button>
-              <button 
-                onClick={confirmOrder}
-                className="bg-brown text-cream px-6 py-2 rounded-lg text-xs font-bold uppercase tracking-wider hover:bg-terra hover:text-white transition-all duration-150"
-              >
-                Confirmar Orden
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Image Lightbox Modal */}
-      {previewImage && (
-        <div 
-          onClick={() => setPreviewImage(null)}
-          className="fixed inset-0 bg-brown/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 cursor-pointer animate-fadeIn"
-        >
-          <div className="relative max-w-4xl max-h-[90vh] bg-white border-2 border-sand rounded-2xl p-3 shadow-2xl flex flex-col items-center overflow-hidden" onClick={e => e.stopPropagation()}>
-            <div className="w-full flex justify-between items-center px-2 pb-2 border-b border-sand text-xs font-bold text-brown">
-              <span className="truncate max-w-md">{previewImage.name}</span>
-              <button 
-                onClick={() => setPreviewImage(null)}
-                className="p-1 rounded hover:bg-sand/40 text-stone hover:text-brown transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <div className="p-2 overflow-auto max-h-[75vh] flex items-center justify-center">
-              <img src={previewImage.url} alt={previewImage.name} className="max-w-full max-h-[70vh] object-contain rounded-lg" />
-            </div>
-            <div className="w-full pt-2 border-t border-sand/40 flex justify-end">
-              <a 
-                href={previewImage.url} 
-                download={previewImage.name} 
-                className="px-4 py-1.5 bg-terra text-white text-xs font-bold rounded-lg flex items-center gap-1.5 hover:bg-brown transition-colors"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>Descargar Imagen</span>
-              </a>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* EDIT MOVEMENT MODAL */}
-      {editingMovement && (
-        <div className="fixed inset-0 bg-brown/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-fadeIn">
-          <div className="bg-white border-2 border-sand rounded-2xl max-w-lg w-full p-5 sm:p-6 shadow-2xl relative">
-            <div className="flex items-center justify-between pb-3 border-b border-sand">
-              <div className="flex items-center gap-2">
-                <Edit2 className="w-5 h-5 text-terra" />
-                <h3 className="font-serif font-bold text-lg text-brown">
-                  Editar {editMovementForm.isFixedCost ? 'Gasto / Egreso' : 'Movimiento de Ingreso'}
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setEditingMovement(null)}
-                className="text-stone hover:text-brown p-1 rounded-lg hover:bg-cream cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={saveEditedMovement} className="mt-4 space-y-4">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-stone mb-1">Fecha</label>
-                  <input
-                    type="date"
-                    value={editMovementForm.date}
-                    onChange={e => setEditMovementForm({ ...editMovementForm, date: e.target.value })}
-                    className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs font-bold text-brown"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-stone mb-1">
-                    {editMovementForm.isFixedCost ? 'Categoría' : 'Orden / Tipo'}
-                  </label>
-                  <input
-                    type="text"
-                    value={editMovementForm.category}
-                    onChange={e => setEditMovementForm({ ...editMovementForm, category: e.target.value })}
-                    className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs font-bold text-brown"
-                    required
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-stone mb-1">
-                  {editMovementForm.isFixedCost ? 'Descripción / Concepto' : 'Cliente / Pagador'}
-                </label>
-                <input
-                  type="text"
-                  value={editMovementForm.isFixedCost ? editMovementForm.description : editMovementForm.clientName}
-                  onChange={e => {
-                    if (editMovementForm.isFixedCost) {
-                      setEditMovementForm({ ...editMovementForm, description: e.target.value });
-                    } else {
-                      setEditMovementForm({ ...editMovementForm, clientName: e.target.value });
-                    }
-                  }}
-                  className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs font-bold text-brown"
-                  required
-                />
-              </div>
-
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-stone mb-1">Monto Base (AR$)</label>
-                  <input
-                    type="number"
-                    step="any"
-                    value={editMovementForm.baseAmount}
-                    onChange={e => setEditMovementForm({ ...editMovementForm, baseAmount: e.target.value })}
-                    className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs font-bold text-brown"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-stone mb-1">IVA (%)</label>
-                  <input
-                    type="number"
-                    step="any"
-                    value={editMovementForm.iva}
-                    onChange={e => setEditMovementForm({ ...editMovementForm, iva: e.target.value })}
-                    className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs font-bold text-brown"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-stone mb-1">Moneda</label>
-                  <select
-                    value={editMovementForm.currency}
-                    onChange={e => setEditMovementForm({ ...editMovementForm, currency: e.target.value })}
-                    className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs font-bold text-brown"
-                  >
-                    <option value="ARS">ARS (AR$)</option>
-                    <option value="USD">USD (US$)</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-stone mb-1">Cuenta Tesorería</label>
-                  <select
-                    value={editMovementForm.account}
-                    onChange={e => setEditMovementForm({ ...editMovementForm, account: e.target.value })}
-                    className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs font-bold text-brown"
-                  >
-                    <option value="Efectivo">Efectivo</option>
-                    <option value="Santander">Santander</option>
-                    <option value="Uala">Ualá</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-stone mb-1">Estado</label>
-                  <select
-                    value={editMovementForm.pendingPayment ? 'pendiente' : 'realizado'}
-                    onChange={e => setEditMovementForm({ ...editMovementForm, pendingPayment: e.target.value === 'pendiente' })}
-                    className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs font-bold text-brown"
-                  >
-                    <option value="realizado">{editMovementForm.isFixedCost ? 'Pagado' : 'Cobrado'}</option>
-                    <option value="pendiente">Pendiente</option>
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-stone mb-1">Notas / Detalle adicional</label>
-                <input
-                  type="text"
-                  value={editMovementForm.note}
-                  onChange={e => setEditMovementForm({ ...editMovementForm, note: e.target.value })}
-                  className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs font-bold text-brown"
-                  placeholder="Observaciones..."
-                />
-              </div>
-
-              <div className="flex justify-end gap-3 pt-3 border-t border-sand">
-                <button
-                  type="button"
-                  onClick={() => setEditingMovement(null)}
-                  className="px-4 py-2 rounded-xl text-xs font-bold border border-sand text-stone hover:bg-cream cursor-pointer"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 rounded-xl text-xs font-bold bg-brown text-cream hover:bg-terra transition-colors cursor-pointer"
-                >
-                  Guardar Cambios
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MANAGE REMITENTES MODAL */}
-      {showManageRemitentesModal && (
-        <div className="fixed inset-0 bg-brown/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-fadeIn">
-          <div className="bg-white border-2 border-sand rounded-2xl max-w-2xl w-full p-5 sm:p-6 shadow-2xl relative flex flex-col max-h-[90vh]">
-            <div className="flex items-center justify-between pb-3 border-b border-sand">
-              <div className="flex items-center gap-2">
-                <Users className="w-5 h-5 text-terra" />
-                <h3 className="font-serif font-bold text-lg text-brown">
-                  Gestión de Remitentes (Emisores)
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowManageRemitentesModal(false);
-                  setEditingRemitenteId(null);
-                  setRemitenteForm({ nombre: '', cuit: '', telefono: '' });
-                }}
-                className="text-stone hover:text-brown p-1 rounded-lg hover:bg-cream cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="overflow-y-auto my-4 space-y-5 pr-1">
-              {/* FORM TO ADD / EDIT */}
-              <div className="bg-light-cream/50 border border-sand rounded-xl p-4">
-                <h4 className="text-xs font-bold text-brown uppercase tracking-wider mb-3 flex items-center gap-1.5">
-                  <Pencil className="w-3.5 h-3.5 text-terra" />
-                  <span>{editingRemitenteId ? 'Editar Remitente' : 'Agregar Nuevo Remitente'}</span>
-                </h4>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div>
-                    <label className="block text-[10px] font-bold text-stone uppercase mb-1">Nombre / Razón Social *</label>
-                    <input
-                      type="text"
-                      placeholder="Ej. Barda Home / Juan Pérez"
-                      value={remitenteForm.nombre}
-                      onChange={e => setRemitenteForm({ ...remitenteForm, nombre: e.target.value })}
-                      className="w-full text-xs p-2 bg-white border border-sand rounded-lg text-brown focus:outline-none focus:border-terra"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-bold text-stone uppercase mb-1">CUIT / CUIL</label>
-                    <input
-                      type="text"
-                      placeholder="Ej. 30-71654321-9"
-                      value={remitenteForm.cuit}
-                      onChange={e => setRemitenteForm({ ...remitenteForm, cuit: e.target.value })}
-                      className="w-full text-xs p-2 bg-white border border-sand rounded-lg text-brown focus:outline-none focus:border-terra"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-bold text-stone uppercase mb-1">Teléfono</label>
-                    <input
-                      type="text"
-                      placeholder="Ej. +54 9 11 1234-5678"
-                      value={remitenteForm.telefono}
-                      onChange={e => setRemitenteForm({ ...remitenteForm, telefono: e.target.value })}
-                      className="w-full text-xs p-2 bg-white border border-sand rounded-lg text-brown focus:outline-none focus:border-terra"
-                    />
-                  </div>
-                </div>
-                <div className="flex justify-end gap-2 mt-3">
-                  {editingRemitenteId && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setEditingRemitenteId(null);
-                        setRemitenteForm({ nombre: '', cuit: '', telefono: '' });
-                      }}
-                      className="px-3 py-1.5 text-xs font-bold border border-sand text-stone rounded-lg hover:bg-cream cursor-pointer"
-                    >
-                      Cancelar Edición
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!remitenteForm.nombre.trim()) {
-                        alert('Ingresá al menos el Nombre o Razón Social del remitente.');
-                        return;
-                      }
-                      if (editingRemitenteId) {
-                        setRemitentesList(remitentesList.map(r => r.id === editingRemitenteId ? { ...r, ...remitenteForm } : r));
-                        if (remitoRemitente.id === editingRemitenteId) {
-                          setRemitoRemitente({ id: editingRemitenteId, ...remitenteForm });
-                        }
-                        setEditingRemitenteId(null);
-                      } else {
-                        const newR = { id: 'rem-' + Date.now(), ...remitenteForm };
-                        setRemitentesList([...remitentesList, newR]);
-                        setRemitoRemitente(newR);
-                      }
-                      setRemitenteForm({ nombre: '', cuit: '', telefono: '' });
-                    }}
-                    className="px-4 py-1.5 text-xs font-bold bg-terra text-white rounded-lg hover:bg-brown transition-colors cursor-pointer flex items-center gap-1.5"
-                  >
-                    <Check className="w-3.5 h-3.5" />
-                    <span>{editingRemitenteId ? 'Guardar Cambios' : 'Agregar Remitente'}</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* LIST OF SAVED REMITENTES */}
-              <div>
-                <h4 className="text-xs font-bold text-stone uppercase tracking-wider mb-2">
-                  Remitentes Guardados ({remitentesList.length})
-                </h4>
-                <div className="divide-y divide-sand border border-sand rounded-xl overflow-hidden bg-white text-xs">
-                  {remitentesList.map(rem => {
-                    const isSelected = remitoRemitente.id === rem.id;
-                    return (
-                      <div key={rem.id} className={`p-3 flex items-center justify-between gap-3 ${isSelected ? 'bg-cream/40' : 'hover:bg-light-cream/30'}`}>
-                        <div className="flex flex-col gap-0.5">
-                          <div className="font-bold text-brown flex items-center gap-2">
-                            <span>{rem.nombre}</span>
-                            {isSelected && (
-                              <span className="text-[9px] bg-terra/10 text-terra border border-terra/30 font-bold px-2 py-0.5 rounded-full uppercase">
-                                Activo en Remito
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-[11px] text-stone flex flex-wrap gap-x-4">
-                            {rem.cuit && <span>CUIT: <strong className="text-brown">{rem.cuit}</strong></span>}
-                            {rem.telefono && <span>Tel: <strong className="text-brown">{rem.telefono}</strong></span>}
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setRemitoRemitente({ ...rem });
-                              setShowManageRemitentesModal(false);
-                            }}
-                            className={`px-2.5 py-1 text-xs font-bold rounded-lg border transition-all cursor-pointer ${
-                              isSelected ? 'bg-brown text-cream border-brown' : 'bg-white text-stone border-sand hover:border-terra hover:text-terra'
-                            }`}
-                          >
-                            {isSelected ? 'Seleccionado' : 'Usar'}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditingRemitenteId(rem.id);
-                              setRemitenteForm({ nombre: rem.nombre, cuit: rem.cuit, telefono: rem.telefono });
-                            }}
-                            className="p-1.5 text-stone hover:text-terra border border-sand rounded-lg bg-white hover:bg-cream transition-colors cursor-pointer"
-                            title="Editar"
-                          >
-                            <Edit2 className="w-3.5 h-3.5" />
-                          </button>
-                          {remitentesList.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (confirm(`¿Eliminar al remitente "${rem.nombre}"?`)) {
-                                  const updated = remitentesList.filter(r => r.id !== rem.id);
-                                  setRemitentesList(updated);
-                                  if (remitoRemitente.id === rem.id && updated.length > 0) {
-                                    setRemitoRemitente(updated[0]);
-                                  }
-                                }
-                              }}
-                              className="p-1.5 text-stone hover:text-error border border-sand rounded-lg bg-white hover:bg-cream transition-colors cursor-pointer"
-                              title="Eliminar"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-
-            <div className="flex justify-end pt-3 border-t border-sand">
-              <button
-                type="button"
-                onClick={() => setShowManageRemitentesModal(false)}
-                className="px-5 py-2 bg-brown text-cream text-xs font-bold rounded-xl hover:bg-terra transition-colors cursor-pointer"
-              >
-                Cerrar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MI PERFIL MODAL */}
-      {showProfileModal && currentUser && (
-        <div 
-          className="fixed inset-0 bg-brown/60 backdrop-blur-xs z-50 flex items-center justify-center p-4"
-          onClick={() => setShowProfileModal(false)}
-        >
-          <div 
-            className="bg-white border-2 border-sand rounded-2xl max-w-md w-full p-6 shadow-2xl relative flex flex-col gap-5 animate-in fade-in zoom-in-95 duration-150"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between border-b border-sand pb-4">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 bg-terra/10 rounded-xl text-terra">
-                  <UserIcon className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="font-serif font-bold text-brown text-lg leading-tight">Mi Perfil</h3>
-                  <p className="text-xs text-stone">Detalles de la cuenta actual</p>
-                </div>
-              </div>
-              <button 
-                type="button" 
-                onClick={() => setShowProfileModal(false)}
-                className="text-stone hover:text-brown p-1.5 rounded-lg hover:bg-cream transition-colors cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="flex items-center gap-4 p-4 bg-light-cream border border-sand rounded-xl">
-              <div className="w-14 h-14 rounded-full bg-brown text-cream flex items-center justify-center font-serif font-bold text-lg shadow-sm shrink-0">
-                {formatAbbreviatedName(currentUser.name)}
-              </div>
-              <div className="flex flex-col min-w-0">
-                <span className="font-bold text-brown text-base truncate">{currentUser.name}</span>
-                <span className="text-xs text-stone truncate">{currentUser.email}</span>
-                <span className="inline-block mt-1 px-2.5 py-0.5 bg-terra/10 text-terra font-bold text-[10px] uppercase rounded-md tracking-wider w-fit">
-                  {currentUser.role}
-                </span>
-              </div>
-            </div>
-
-            <div className="flex flex-col gap-2.5">
-              <h4 className="text-xs font-bold uppercase tracking-wider text-stone">Módulos habilitados</h4>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                {Object.entries(currentUser.permissions).map(([key, perm]) => {
-                  const hasView = Boolean((perm as any)?.view);
-                  return (
-                    <div key={key} className={`p-2.5 rounded-lg border flex items-center gap-2 ${hasView ? 'bg-emerald-50/50 border-emerald-200 text-emerald-800' : 'bg-gray-50 border-gray-200 text-gray-400 opacity-60'}`}>
-                      <ShieldCheck className={`w-4 h-4 ${hasView ? 'text-emerald-600' : 'text-gray-400'}`} />
-                      <span className="font-bold capitalize">{key}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="pt-2">
-              <button
-                type="button"
-                onClick={() => setShowProfileModal(false)}
-                className="w-full py-2.5 bg-brown hover:bg-terra text-white text-xs font-bold rounded-xl transition-colors cursor-pointer shadow-xs"
-              >
-                Cerrar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL REGISTRAR NUEVO MOVIMIENTO (INGRESO O EGRESO) */}
-      {showNewMovementModal && (
-        <div className="fixed inset-0 bg-brown/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-fadeIn">
-          <div className="bg-white border-2 border-sand rounded-2xl max-w-2xl w-full p-5 sm:p-6 shadow-2xl relative flex flex-col max-h-[92vh]">
-            {/* MODAL HEADER */}
-            <div className="flex items-center justify-between pb-3 border-b border-sand">
-              <div>
-                <h3 className="font-serif font-bold text-lg text-brown flex items-center gap-2">
-                  <FileText className="w-5 h-5 text-terra" />
-                  Registrar Nuevo Movimiento
-                </h3>
-                <p className="text-xs text-stone mt-0.5">
-                  Cargá un nuevo asiento contable en el Libro Diario de Movimientos.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowNewMovementModal(false)}
-                className="text-stone hover:text-brown p-1 rounded-lg hover:bg-cream cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* TYPE SWITCH PILLS: INGRESO vs EGRESO */}
-            <div className="my-4">
-              <label className="block text-[10px] font-bold uppercase tracking-wider text-stone mb-1.5">
-                Tipo de Operación *
-              </label>
-              <div className="grid grid-cols-2 gap-2 bg-light-cream/70 p-1.5 rounded-xl border border-sand">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setNewMovementType('ingreso');
-                    setNewMovementModalForm({
-                      ...newMovementModalForm,
-                      category: 'Aporte de Capital',
-                      description: ''
-                    });
-                  }}
-                  className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
-                    newMovementType === 'ingreso'
-                      ? 'bg-emerald-700 text-white shadow-sm'
-                      : 'text-emerald-800 hover:bg-emerald-50'
-                  }`}
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>+ Ingreso a Tesorería</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setNewMovementType('egreso');
-                    setNewMovementModalForm({
-                      ...newMovementModalForm,
-                      category: 'Alquiler',
-                      description: ''
-                    });
-                  }}
-                  className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
-                    newMovementType === 'egreso'
-                      ? 'bg-rose-700 text-white shadow-sm'
-                      : 'text-rose-800 hover:bg-rose-50'
-                  }`}
-                >
-                  <Trash2 className="w-4 h-4" />
-                  <span>- Gasto / Egreso</span>
-                </button>
-              </div>
-            </div>
-
-            <form onSubmit={submitNewMovement} className="overflow-y-auto pr-1 space-y-4">
-              {/* SUB-SELECTOR PARA INGRESOS */}
-              {newMovementType === 'ingreso' && (
-                <div className="bg-emerald-50/60 border border-emerald-200/80 rounded-xl p-3">
-                  <label className="block text-[10px] font-bold uppercase tracking-wider text-emerald-900 mb-1.5">
-                    Modalidad del Ingreso
-                  </label>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setNewMovementModalForm({ ...newMovementModalForm, incomeMode: 'directo', orderId: null })}
-                      className={`flex-1 py-1.5 px-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                        newMovementModalForm.incomeMode === 'directo'
-                          ? 'bg-emerald-700 text-white shadow-xs'
-                          : 'bg-white text-emerald-900 border border-emerald-200 hover:bg-emerald-100/50'
-                      }`}
-                    >
-                      Ingreso Directo / Aporte
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const pendingOrders = sales.filter(s => (s.senaAmount || 0) < s.total);
-                        const firstOrder = pendingOrders.length > 0 ? pendingOrders[0] : null;
-                        const rest = firstOrder ? Math.max(0, firstOrder.total - (firstOrder.senaAmount || 0)) : 0;
-                        setNewMovementModalForm({
-                          ...newMovementModalForm,
-                          incomeMode: 'saldo',
-                          orderId: firstOrder ? firstOrder.id : null,
-                          amount: rest > 0 ? String(rest) : newMovementModalForm.amount,
-                          description: firstOrder ? `Cobro saldo pedido #${firstOrder.orderNum} - ${firstOrder.client?.nombre || ''}` : ''
-                        });
-                      }}
-                      className={`flex-1 py-1.5 px-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                        newMovementModalForm.incomeMode === 'saldo'
-                          ? 'bg-emerald-700 text-white shadow-xs'
-                          : 'bg-white text-emerald-900 border border-emerald-200 hover:bg-emerald-100/50'
-                      }`}
-                    >
-                      Cobro Saldo de Pedido
-                    </button>
-                  </div>
-
-                  {newMovementModalForm.incomeMode === 'saldo' && (
-                    <div className="mt-3">
-                      <label className="block text-[10px] font-bold text-emerald-900 uppercase mb-1">
-                        Seleccionar Pedido / Venta Pendiente *
-                      </label>
-                      <select
-                        value={newMovementModalForm.orderId || ''}
-                        onChange={e => {
-                          const oId = Number(e.target.value);
-                          const selOrder = sales.find(s => s.id === oId);
-                          const rest = selOrder ? Math.max(0, selOrder.total - (selOrder.senaAmount || 0)) : 0;
-                          setNewMovementModalForm({
-                            ...newMovementModalForm,
-                            orderId: oId,
-                            amount: rest > 0 ? String(rest) : newMovementModalForm.amount,
-                            description: selOrder ? `Cobro saldo pedido #${selOrder.orderNum} - ${selOrder.client?.nombre || ''}` : ''
-                          });
-                        }}
-                        className="w-full text-xs p-2.5 bg-white border border-emerald-300 rounded-xl text-brown font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                        required
-                      >
-                        <option value="" disabled>Seleccioná un pedido pendiente...</option>
-                        {sales.filter(s => (s.senaAmount || 0) < s.total).map(s => {
-                          const saldoPendiente = s.total - (s.senaAmount || 0);
-                          return (
-                            <option key={s.id} value={s.id}>
-                              #{s.orderNum} • {s.client?.nombre || 'Cliente'} • Resta: {fmt(saldoPendiente)} (Total: {fmt(s.total)})
-                            </option>
-                          );
-                        })}
-                      </select>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* CAMPOS PRINCIPALES: FECHA & CATEGORÍA */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-[10px] font-bold uppercase tracking-wider text-stone mb-1">Fecha *</label>
-                  <input
-                    type="date"
-                    required
-                    value={newMovementModalForm.date}
-                    onChange={e => setNewMovementModalForm({ ...newMovementModalForm, date: e.target.value })}
-                    className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs font-semibold text-brown focus:ring-2 focus:ring-terra/30 focus:bg-white transition-all outline-none"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-bold uppercase tracking-wider text-stone mb-1">Categoría *</label>
-                  {newMovementType === 'ingreso' ? (
-                    <select
-                      value={newMovementModalForm.category}
-                      onChange={e => setNewMovementModalForm({ ...newMovementModalForm, category: e.target.value })}
-                      className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs font-semibold text-brown focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all outline-none"
-                    >
-                      <option value="Aporte de Capital">Aporte de Capital</option>
-                      <option value="Venta Showroom">Venta Showroom Directa</option>
-                      <option value="Cobro de Saldo de Pedido">Cobro de Saldo de Pedido</option>
-                      <option value="Cobro Extraordinario">Cobro Extraordinario</option>
-                      <option value="Reembolso">Reembolso / Devolución</option>
-                      <option value="Transferencia Entrante">Transferencia Entrante</option>
-                      <option value="Otros">Otros Ingresos</option>
-                    </select>
-                  ) : (
-                    <select
-                      value={newMovementModalForm.category}
-                      onChange={e => setNewMovementModalForm({ ...newMovementModalForm, category: e.target.value })}
-                      className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs font-semibold text-brown focus:ring-2 focus:ring-rose-500 focus:bg-white transition-all outline-none"
-                    >
-                      <option value="Alquiler">Alquiler Showroom / Depósito</option>
-                      <option value="Sueldos">Sueldos & Honorarios</option>
-                      <option value="Insumos">Insumos & Materia Prima</option>
-                      <option value="Publicidad">Publicidad & Marketing</option>
-                      <option value="Servicios">Servicios (Luz, Gas, Internet)</option>
-                      <option value="Impuestos">Impuestos & Monotributo</option>
-                      <option value="Fletes">Fletes & Envíos</option>
-                      <option value="Mantenimiento">Mantenimiento & Taller</option>
-                      <option value="Transferencia Saliente">Transferencia Saliente</option>
-                      <option value="Otros">Otros Egresos</option>
-                    </select>
-                  )}
-                </div>
-              </div>
-
-              {/* DESCRIPCIÓN / CLIENTE / PROVEEDOR */}
-              <div>
-                <label className="block text-[10px] font-bold uppercase tracking-wider text-stone mb-1">
-                  {newMovementType === 'ingreso' ? 'Concepto / Cliente / Detalle *' : 'Descripción del Gasto / Proveedor *'}
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder={newMovementType === 'ingreso' ? 'Ej. Venta en efectivo mesa de roble / Aporte Tomás' : 'Ej. Compra de perfiles de hierro / Pago internet'}
-                  value={newMovementModalForm.description}
-                  onChange={e => setNewMovementModalForm({ ...newMovementModalForm, description: e.target.value })}
-                  className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs font-semibold text-brown focus:ring-2 focus:ring-terra/30 focus:bg-white transition-all outline-none"
-                />
-              </div>
-
-              {/* MONTO BASE, IVA Y MONEDA */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-[10px] font-bold uppercase tracking-wider text-stone mb-1">
-                    Monto Base *
-                  </label>
-                  <input
-                    type="number"
-                    step="any"
-                    required
-                    placeholder="0.00"
-                    value={newMovementModalForm.amount}
-                    onChange={e => setNewMovementModalForm({ ...newMovementModalForm, amount: e.target.value })}
-                    className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs font-bold text-brown focus:ring-2 focus:ring-terra/30 focus:bg-white transition-all outline-none"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-bold uppercase tracking-wider text-stone mb-1">
-                    IVA (%)
-                  </label>
-                  <select
-                    value={newMovementModalForm.iva}
-                    onChange={e => setNewMovementModalForm({ ...newMovementModalForm, iva: e.target.value })}
-                    className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs font-semibold text-brown focus:ring-2 focus:ring-terra/30 focus:bg-white transition-all outline-none"
-                  >
-                    <option value="0">0% (Exento / Sin IVA)</option>
-                    <option value="10.5">10.5% (IVA Reducido)</option>
-                    <option value="21">21% (IVA General)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-bold uppercase tracking-wider text-stone mb-1">
-                    Moneda
-                  </label>
-                  <select
-                    value={newMovementModalForm.currency}
-                    onChange={e => setNewMovementModalForm({ ...newMovementModalForm, currency: e.target.value })}
-                    className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs font-semibold text-brown focus:ring-2 focus:ring-terra/30 focus:bg-white transition-all outline-none"
-                  >
-                    <option value="ARS">ARS (AR$)</option>
-                    <option value="USD">USD (US$)</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* CUENTA Y ESTADO */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-[10px] font-bold uppercase tracking-wider text-stone mb-1">
-                    Cuenta de Tesorería *
-                  </label>
-                  <select
-                    value={newMovementModalForm.account}
-                    onChange={e => setNewMovementModalForm({ ...newMovementModalForm, account: e.target.value })}
-                    className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs font-semibold text-brown focus:ring-2 focus:ring-terra/30 focus:bg-white transition-all outline-none"
-                  >
-                    <option value="Efectivo">Efectivo (Caja Chica)</option>
-                    <option value="Santander">Banco Santander</option>
-                    <option value="Banco Galicia CC">Banco Galicia CC</option>
-                    <option value="Uala">Ualá / Mercado Pago</option>
-                    <option value="Banco BBVA">Banco BBVA</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-bold uppercase tracking-wider text-stone mb-1">
-                    Estado del Movimiento *
-                  </label>
-                  <select
-                    value={newMovementModalForm.pendingPayment ? 'pendiente' : 'realizado'}
-                    onChange={e => setNewMovementModalForm({ ...newMovementModalForm, pendingPayment: e.target.value === 'pendiente' })}
-                    className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs font-semibold text-brown focus:ring-2 focus:ring-terra/30 focus:bg-white transition-all outline-none"
-                  >
-                    <option value="realizado">
-                      {newMovementType === 'ingreso' ? 'Cobrado / Efectivizado' : 'Pagado / Efectivizado'}
-                    </option>
-                    <option value="pendiente">
-                      {newMovementType === 'ingreso' ? 'Pendiente de Cobro' : 'Pendiente de Pago'}
-                    </option>
-                  </select>
-                </div>
-              </div>
-
-              {/* NOTAS ADICIONALES */}
-              <div>
-                <label className="block text-[10px] font-bold uppercase tracking-wider text-stone mb-1">
-                  Notas / Observaciones
-                </label>
-                <input
-                  type="text"
-                  placeholder="Número de comprobante, factura o comentarios opcionales..."
-                  value={newMovementModalForm.note}
-                  onChange={e => setNewMovementModalForm({ ...newMovementModalForm, note: e.target.value })}
-                  className="w-full p-2.5 bg-cream/30 border border-sand rounded-xl text-xs text-brown focus:ring-2 focus:ring-terra/30 focus:bg-white transition-all outline-none"
-                />
-              </div>
-
-              {/* TOTAL CALCULADO RESUMEN */}
-              {(() => {
-                const bAmt = parseFloat(newMovementModalForm.amount) || 0;
-                const ivaP = parseFloat(newMovementModalForm.iva || '0') || 0;
-                const tot = bAmt * (1 + ivaP / 100);
-                const isUsd = newMovementModalForm.currency === 'USD';
-                return (
-                  <div className={`p-3.5 rounded-xl border flex items-center justify-between ${
-                    newMovementType === 'ingreso' ? 'bg-emerald-50 border-emerald-200' : 'bg-rose-50 border-rose-200'
-                  }`}>
-                    <div>
-                      <span className="text-[10px] uppercase font-bold text-stone tracking-wider block">
-                        Total {newMovementType === 'ingreso' ? 'a Ingresar' : 'a Egresar'}
-                      </span>
-                      {ivaP > 0 && (
-                        <span className="text-[11px] text-stone">
-                          Base: {isUsd ? `US$ ${bAmt.toLocaleString('es-AR')}` : fmt(bAmt)} | IVA ({ivaP}%): {isUsd ? `US$ ${(tot - bAmt).toLocaleString('es-AR')}` : fmt(tot - bAmt)}
-                        </span>
-                      )}
-                    </div>
-                    <span className={`text-xl font-mono font-bold ${
-                      newMovementType === 'ingreso' ? 'text-emerald-800' : 'text-rose-800'
-                    }`}>
-                      {newMovementType === 'ingreso' ? '+' : '-'}{isUsd ? `US$ ${tot.toLocaleString('es-AR')}` : fmt(tot)}
-                    </span>
-                  </div>
-                );
-              })()}
-
-              {/* BOTONES ACCIÓN */}
-              <div className="flex justify-end gap-3 pt-3 border-t border-sand">
-                <button
-                  type="button"
-                  onClick={() => setShowNewMovementModal(false)}
-                  className="px-4 py-2.5 rounded-xl text-xs font-bold border border-sand text-stone hover:bg-cream cursor-pointer transition-colors"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className={`px-5 py-2.5 rounded-xl text-xs font-bold text-white transition-all cursor-pointer shadow-sm flex items-center gap-2 ${
-                    newMovementType === 'ingreso'
-                      ? 'bg-emerald-700 hover:bg-emerald-800'
-                      : 'bg-rose-700 hover:bg-rose-800'
-                  }`}
-                >
-                  <CheckCircle className="w-4 h-4" />
-                  <span>{newMovementType === 'ingreso' ? 'Guardar Ingreso' : 'Guardar Egreso'}</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* WHATSAPP INTEGRATION & SIMULATOR MODAL */}
+      {/* TRANSACTION DETAIL MODAL */}
+      <TransactionDetailModal
+        isOpen={Boolean(selectedTransactionDetail)}
+        onClose={() => setSelectedTransactionDetail(null)}
+        transaction={selectedTransactionDetail}
+        fmt={fmt}
+        canEdit={canEditFinanzas}
+        onToggleStatus={(item) => toggleMovementStatus(item)}
+        onDelete={(item) => {
+          if (item.isFixedCost) {
+            deleteFixedCost(Number(item.originalId));
+          } else if (item.isLedger) {
+            const updated = paymentsLedger.filter(p => String(p.id) !== String(item.originalId || item.id));
+            setPaymentsLedger(updated);
+            localStorage.setItem('barda_payments_ledger', JSON.stringify(updated));
+            deleteFirestoreDocument('barda_payments_ledger', String(item.originalId || item.id));
+          }
+          setSelectedTransactionDetail(null);
+        }}
+        onViewOrder={(orderIdOrNum) => {
+          const found = sales.find(s => String(s.id) === String(orderIdOrNum) || s.orderNum === String(orderIdOrNum));
+          if (found) {
+            setSelectedSaleDetail(found);
+            setSelectedTransactionDetail(null);
+          }
+        }}
+      />
+
+      {/* WHATSAPP INTEGRATION MODAL */}
       <WhatsAppIntegrationModal
         isOpen={showWhatsAppModal}
         onClose={() => setShowWhatsAppModal(false)}
+        fmt={fmt}
         onApplyTransaction={handleApplyWhatsAppTransaction}
       />
 
-      {/* FOOTER WITH LOGO */}
-      <footer className="bg-white border-t border-sand py-4 px-6 mt-12 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-stone print:hidden">
-        <BardaLogo size="sm" />
-        <div className="text-[11px] text-stone">
-          Sistema de Gestión Interna • Presupuestos, Ventas y Remitos
+      {/* PREVIEW MODAL */}
+      {previewImage && (
+        <div
+          className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4"
+          onClick={() => setPreviewImage(null)}
+        >
+          <div
+            className="relative max-w-4xl max-h-[90vh] bg-white rounded-2xl overflow-hidden shadow-2xl p-2"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex justify-between items-center px-4 py-2 border-b border-sand/40">
+              <span className="font-medium text-xs text-brown truncate max-w-md">{previewImage.name}</span>
+              <button
+                type="button"
+                onClick={() => setPreviewImage(null)}
+                className="p-1 hover:bg-cream rounded-lg text-stone hover:text-brown transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-2 flex items-center justify-center max-h-[calc(90vh-60px)] overflow-auto">
+              <img
+                src={previewImage.url}
+                alt={previewImage.name}
+                className="max-h-[80vh] w-auto object-contain rounded-lg"
+              />
+            </div>
+          </div>
         </div>
-      </footer>
-
+      )}
     </div>
   );
 }
-
-// METRICS HELPERS
-const metricsHelpers = {
-  currentMonthCount: (sales: any[]) => {
-    const thisMonthStr = new Date().toISOString().substring(0, 7); // "YYYY-MM"
-    return sales.filter(s => s.date?.substring(0, 7) === thisMonthStr).length;
-  },
-  currentMonthAmount: (sales: any[]) => {
-    const thisMonthStr = new Date().toISOString().substring(0, 7); // "YYYY-MM"
-    return sales
-      .filter(s => s.date?.substring(0, 7) === thisMonthStr)
-      .reduce((acc, s) => acc + s.total, 0);
-  }
-};

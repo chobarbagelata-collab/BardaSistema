@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="100%" height="100%">
+  <defs>
+    <style>
+      .bg-shadow { fill: #EBDAD2; }
+      .outline-stroke { stroke: #2E180E; stroke-width: 6.5; stroke-linecap: round; stroke-linejoin: round; }
+      .outline-thin { stroke: #2E180E; stroke-width: 4.5; stroke-linecap: round; stroke-linejoin: round; }
+      .teal-fill { fill: #7AA2AC; }
+      .wood-fill { fill: #C7824B; }
+      .cream-fill { fill: #FDFBF7; }
+      .dark-color { fill: #2E180E; }
+      .caramel-color { fill: #BA6E35; }
+    </style>
+  </defs>
+
+  <!-- Floor Shadow -->
+  <ellipse cx="250" cy="335" rx="195" ry="13" class="bg-shadow" />
+
+  <!-- Chair Legs -->
+  <!-- Back legs -->
+  <line x1="210" y1="245" x2="195" y2="320" class="outline-stroke" />
+  <line x1="290" y1="245" x2="305" y2="320" class="outline-stroke" />
+  <!-- Front legs -->
+  <line x1="165" y1="248" x2="136" y2="340" class="outline-stroke" />
+  <line x1="335" y1="248" x2="364" y2="340" class="outline-stroke" />
+
+  <!-- Outer Chair Body Frame -->
+  <!-- Main Wood Outer Shell -->
+  <path d="M 140 238 C 100 238, 92 140, 92 100 C 92 48, 140 18, 250 18 C 360 18, 408 48, 408 100 C 408 140, 400 238, 360 238 C 310 258, 190 258, 140 238 Z" fill="#FDFBF7" stroke="#2E180E" stroke-width="7" stroke-linejoin="round" />
+
+  <!-- Backrest Inner Teal Cushion -->
+  <path d="M 172 205 C 160 205, 148 185, 148 100 C 148 55, 180 30, 250 30 C 320 30, 352 55, 352 100 C 352 185, 340 205, 328 205 Z" class="teal-fill" stroke="#2E180E" stroke-width="6" stroke-linejoin="round" />
+
+  <!-- Backrest Vertical Stitching Lines -->
+  <line x1="190" y1="36" x2="190" y2="185" class="outline-stroke" />
+  <line x1="230" y1="32" x2="230" y2="185" class="outline-stroke" />
+  <line x1="270" y1="32" x2="270" y2="185" class="outline-stroke" />
+  <line x1="310" y1="36" x2="310" y2="185" class="outline-stroke" />
+
+  <!-- Left Armrest Wood Shell -->
+  <path d="M 166 85 C 130 90, 102 120, 102 165 C 102 210, 130 230, 172 230 C 176 230, 180 200, 180 150 C 180 105, 175 88, 166 85 Z" class="wood-fill" stroke="#2E180E" stroke-width="6.5" stroke-linejoin="round" />
+  <!-- Left Armrest Contour Lines -->
+  <path d="M 125 125 C 118 140, 118 175, 126 195" fill="none" class="outline-thin" />
+  <path d="M 142 110 C 134 135, 134 185, 145 208" fill="none" class="outline-thin" />
+  <path d="M 158 102 C 150 135, 150 195, 162 218" fill="none" class="outline-thin" />
+
+  <!-- Right Armrest Wood Shell -->
+  <path d="M 334 85 C 370 90, 398 120, 398 165 C 398 210, 370 230, 328 230 C 324 230, 320 200, 320 150 C 320 105, 325 88, 334 85 Z" class="wood-fill" stroke="#2E180E" stroke-width="6.5" stroke-linejoin="round" />
+  <!-- Right Armrest Contour Lines -->
+  <path d="M 375 125 C 382 140, 382 175, 374 195" fill="none" class="outline-thin" />
+  <path d="M 358 110 C 366 135, 366 185, 355 208" fill="none" class="outline-thin" />
+  <path d="M 342 102 C 350 135, 350 195, 338 218" fill="none" class="outline-thin" />
+
+  <!-- Seat Bottom Rim / Wood Apron -->
+  <path d="M 136 215 C 136 242, 364 242, 364 215 Z" fill="#C7824B" stroke="#2E180E" stroke-width="6.5" />
+
+  <!-- Seat Cushion (Cream base border + Teal Pillow) -->
+  <rect x="132" y="174" width="236" height="48" rx="24" fill="#FDFBF7" stroke="#2E180E" stroke-width="6.5" />
+  <rect x="140" y="180" width="220" height="36" rx="18" class="teal-fill" stroke="#2E180E" stroke-width="5" />
+
+  <!-- Brand Typography -->
+  <!-- BARDA HOME -->
+  <text 
+    x="250" 
+    y="435" 
+    text-anchor="middle" 
+    font-family="'Exo 2', 'Montserrat', 'Inter', sans-serif" 
+    font-weight="900" 
+    font-size="39" 
+    letter-spacing="7" 
+    class="dark-color"
+  >BARDA HOME</text>
+
+  <!-- MODERN FURNITURE -->
+  <text 
+    x="250" 
+    y="475" 
+    text-anchor="middle" 
+    font-family="'Exo 2', 'Montserrat', 'Inter', sans-serif" 
+    font-weight="700" 
+    font-size="19" 
+    letter-spacing="7" 
+    class="caramel-color"
+  >MODERN FURNITURE</text>
+</svg>
