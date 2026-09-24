@@ -2265,37 +2265,18 @@ export default function App() {
 
   // Convert Quote to Sale Order
   const handleGenerateOrder = () => {
-    if (!quoteItems.length) return;
+    if (!quoteItems.length) {
+      alert('Debe agregar al menos un producto al presupuesto antes de generar la orden de pedido.');
+      return;
+    }
 
-    // Check if any client field is empty
-    const isClientValid = 
-      cliente.nombre.trim() !== '' &&
-      cliente.telefono.trim() !== '' &&
-      cliente.cuit.trim() !== '' &&
-      cliente.cp.trim() !== '' &&
-      cliente.direccion.trim() !== '' &&
-      cliente.ciudad.trim() !== '' &&
-      cliente.provincia.trim() !== '';
-
-    if (!isClientValid) {
+    // Check if client name is entered
+    if (!cliente.nombre || !cliente.nombre.trim()) {
       setOrderValidationAttempted(true);
-      // Focus and scroll to first empty field
-      const fields = [
-        { val: cliente.nombre, placeholder: 'Nombre y Apellido' },
-        { val: cliente.telefono, placeholder: 'Teléfono' },
-        { val: cliente.cuit, placeholder: 'CUIT / CUIL' },
-        { val: cliente.cp, placeholder: 'Código Postal' },
-        { val: cliente.direccion, placeholder: 'Dirección' },
-        { val: cliente.ciudad, placeholder: 'Ciudad' },
-        { val: cliente.provincia, placeholder: 'Provincia' }
-      ];
-      const firstEmpty = fields.find(f => !f.val.trim());
-      if (firstEmpty) {
-        const element = document.querySelector(`input[placeholder="${firstEmpty.placeholder}"]`);
-        if (element) {
-          element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          (element as HTMLInputElement).focus();
-        }
+      const element = document.querySelector('input[placeholder="Nombre y Apellido"]');
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        (element as HTMLInputElement).focus();
       }
       return;
     }
@@ -5797,10 +5778,10 @@ export default function App() {
               <div className="flex flex-col gap-3 print:hidden">
                 {quoteItems.length > 0 && (
                   <>
-                    {orderValidationAttempted && (
+                    {orderValidationAttempted && (!cliente.nombre || !cliente.nombre.trim()) && (
                       <div className="text-error bg-error/5 border border-error/20 py-2.5 px-3 rounded-lg text-xs font-semibold text-center flex items-center justify-center gap-1.5 font-sans animate-fadeIn">
                         <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                        <span>Por favor, complete todos los campos de "Datos del Cliente" antes de generar el pedido.</span>
+                        <span>Por favor, ingrese el Nombre del Cliente antes de generar la orden de pedido.</span>
                       </div>
                     )}
                     <button 
@@ -9884,6 +9865,375 @@ export default function App() {
           />
         )}
       </main>
+
+      {/* GENERATE ORDER MODAL */}
+      {showOrderModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150 overflow-y-auto print:hidden">
+          <div className="bg-white border border-sand rounded-2xl shadow-2xl max-w-2xl w-full max-h-[92vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-150 my-auto">
+            {/* Modal Header */}
+            <div className="p-4 sm:p-5 border-b border-sand flex items-center justify-between bg-gradient-to-r from-brown to-brown/95 text-white">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-white/10 rounded-xl text-sand">
+                  <ShoppingBag className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-serif text-lg font-bold text-white">
+                      Generar Orden de Pedido
+                    </h3>
+                    <span className="text-[11px] font-mono font-bold bg-white/20 text-cream px-2.5 py-0.5 rounded-full">
+                      {`PE-${(() => {
+                        const maxNum = sales.reduce((max, s) => {
+                          const m = (s.orderNum || '').match(/\d+/);
+                          return m ? Math.max(max, parseInt(m[0], 10)) : max;
+                        }, 1000);
+                        return maxNum + 1;
+                      })()}`}
+                    </span>
+                  </div>
+                  <p className="text-xs text-cream/70 mt-0.5">
+                    Revise los datos, configure la seña y confirme el pedido de venta.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowOrderModal(false)}
+                className="p-1.5 text-cream/70 hover:text-white hover:bg-white/10 rounded-xl transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Content (Scrollable) */}
+            <div className="p-4 sm:p-6 overflow-y-auto flex flex-col gap-4 text-xs font-sans">
+              {/* Resumen del Cliente y Pedido */}
+              <div className="bg-light-cream/60 border border-sand rounded-xl p-4 flex flex-col gap-2.5">
+                <div className="flex items-center justify-between border-b border-sand/50 pb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-brown text-sm">
+                      {cliente.nombre || 'Cliente sin nombre'}
+                    </span>
+                    {cliente.telefono && (
+                      <span className="text-stone font-medium">· Tel: {cliente.telefono}</span>
+                    )}
+                  </div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-terra bg-terra/10 px-2 py-0.5 rounded-md">
+                    {pagosData[selectedPago]?.name || 'Efectivo'}
+                  </span>
+                </div>
+
+                {/* Items list */}
+                <div className="flex flex-col gap-1.5 max-h-36 overflow-y-auto pr-1">
+                  {quoteItems.map((it, idx) => (
+                    <div key={it.id || idx} className="flex justify-between items-center py-1 border-b border-sand/30 last:border-0">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="w-5 h-5 rounded-full bg-sand/60 text-brown font-bold text-[10px] flex items-center justify-center shrink-0">
+                          {it.qty}
+                        </span>
+                        <div className="truncate">
+                          <span className="font-semibold text-brown">{it.name}</span>
+                          {it.detail && <span className="text-[10px] text-stone block truncate">{it.detail}</span>}
+                        </div>
+                      </div>
+                      <span className="font-mono font-bold text-brown shrink-0 ml-2">
+                        {fmt(it.unitPrice * it.qty)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Total Summary Row */}
+                <div className="flex justify-between items-center pt-2 border-t border-sand font-medium">
+                  <div className="flex items-center gap-2 text-stone text-[11px]">
+                    <Calendar className="w-3.5 h-3.5 text-terra" />
+                    <span>Entrega estimada: <strong>{calcDeliveryDate() || 'A definir'}</strong></span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[10px] uppercase font-bold text-stone block">Total del Pedido</span>
+                    <span className="font-serif text-lg font-bold text-terra">
+                      {fmt(finalBudgetValue)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Configuración de Seña / Anticipo */}
+              <div className="flex flex-col gap-2">
+                <label className="text-[11px] uppercase font-bold tracking-wider text-brown flex items-center justify-between">
+                  <span>Anticipo / Seña a Cobrar</span>
+                  <span className="text-[10px] font-normal text-stone">
+                    {orderForm.isSenaCustom ? 'Monto Manual' : `${orderForm.senaPercent}% del total`}
+                  </span>
+                </label>
+
+                {/* Preset buttons */}
+                <div className="grid grid-cols-4 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOrderForm(prev => ({
+                        ...prev,
+                        senaPercent: 50,
+                        isSenaCustom: false,
+                        paymentStatus: 'Señado'
+                      }));
+                    }}
+                    className={`py-2 px-1 rounded-xl text-center font-bold text-xs border transition-all cursor-pointer ${
+                      !orderForm.isSenaCustom && orderForm.senaPercent === 50
+                        ? 'bg-terra text-white border-terra shadow-2xs'
+                        : 'bg-white border-sand text-brown hover:bg-cream/40'
+                    }`}
+                  >
+                    50% (Sugerido)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOrderForm(prev => ({
+                        ...prev,
+                        senaPercent: 100,
+                        isSenaCustom: false,
+                        paymentStatus: 'Pagado'
+                      }));
+                    }}
+                    className={`py-2 px-1 rounded-xl text-center font-bold text-xs border transition-all cursor-pointer ${
+                      !orderForm.isSenaCustom && orderForm.senaPercent === 100
+                        ? 'bg-emerald-700 text-white border-emerald-700 shadow-2xs'
+                        : 'bg-white border-sand text-brown hover:bg-cream/40'
+                    }`}
+                  >
+                    100% (Total)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOrderForm(prev => ({
+                        ...prev,
+                        senaPercent: 0,
+                        isSenaCustom: false,
+                        paymentStatus: 'Pendiente'
+                      }));
+                    }}
+                    className={`py-2 px-1 rounded-xl text-center font-bold text-xs border transition-all cursor-pointer ${
+                      !orderForm.isSenaCustom && orderForm.senaPercent === 0
+                        ? 'bg-rose-700 text-white border-rose-700 shadow-2xs'
+                        : 'bg-white border-sand text-brown hover:bg-cream/40'
+                    }`}
+                  >
+                    0% (Sin Seña)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOrderForm(prev => ({
+                        ...prev,
+                        isSenaCustom: true,
+                        senaCustom: prev.senaCustom || Math.round(finalBudgetValue * 0.5)
+                      }));
+                    }}
+                    className={`py-2 px-1 rounded-xl text-center font-bold text-xs border transition-all cursor-pointer ${
+                      orderForm.isSenaCustom
+                        ? 'bg-brown text-white border-brown shadow-2xs'
+                        : 'bg-white border-sand text-brown hover:bg-cream/40'
+                    }`}
+                  >
+                    Manual $
+                  </button>
+                </div>
+
+                {/* Custom Amount Input if chosen */}
+                {orderForm.isSenaCustom && (
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-xs font-bold text-stone">Monto Seña AR$:</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max={finalBudgetValue}
+                      value={orderForm.senaCustom || ''}
+                      onChange={e => {
+                        const val = parseFloat(e.target.value) || 0;
+                        setOrderForm(prev => ({ ...prev, senaCustom: val }));
+                      }}
+                      className="flex-1 bg-white border border-sand rounded-xl px-3 py-1.5 text-xs font-mono font-bold text-brown focus:outline-none focus:border-terra"
+                      placeholder="Ingrese monto de seña..."
+                    />
+                  </div>
+                )}
+
+                {/* Breakdown Display */}
+                {(() => {
+                  const senaVal = orderForm.isSenaCustom
+                    ? (orderForm.senaCustom || 0)
+                    : Math.round(finalBudgetValue * (orderForm.senaPercent / 100));
+                  const saldoVal = Math.max(0, finalBudgetValue - senaVal);
+                  return (
+                    <div className="grid grid-cols-2 gap-3 bg-cream/30 p-3 rounded-xl border border-sand/60">
+                      <div>
+                        <span className="text-[10px] uppercase font-bold text-stone block">Seña a Asentar:</span>
+                        <span className="font-mono font-bold text-emerald-800 text-sm">
+                          {fmt(senaVal)}
+                        </span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[10px] uppercase font-bold text-stone block">Saldo Restante:</span>
+                        <span className="font-mono font-bold text-brown text-sm">
+                          {fmt(saldoVal)}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Estados de Entrega y Pago */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] uppercase font-bold tracking-wider text-stone">
+                    Estado de Fabricación
+                  </label>
+                  <select
+                    value={orderForm.status}
+                    onChange={e => setOrderForm(prev => ({ ...prev, status: e.target.value }))}
+                    className="w-full bg-white border border-sand rounded-xl px-3 py-2 text-xs font-semibold text-brown focus:outline-none focus:border-terra cursor-pointer"
+                  >
+                    <option value="Pendiente">Pendiente</option>
+                    <option value="En Producción">En Producción</option>
+                    <option value="Listo para Entrega">Listo para Entrega</option>
+                    <option value="Entregado">Entregado</option>
+                  </select>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] uppercase font-bold tracking-wider text-stone">
+                    Estado de Pago
+                  </label>
+                  <select
+                    value={orderForm.paymentStatus}
+                    onChange={e => setOrderForm(prev => ({ ...prev, paymentStatus: e.target.value }))}
+                    className="w-full bg-white border border-sand rounded-xl px-3 py-2 text-xs font-semibold text-brown focus:outline-none focus:border-terra cursor-pointer"
+                  >
+                    <option value="Señado">Señado</option>
+                    <option value="Pagado">Pagado Completo</option>
+                    <option value="Pendiente">Pendiente de Pago</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Observaciones y Notas */}
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] uppercase font-bold tracking-wider text-stone">
+                  Notas / Observaciones del Pedido (Opcional)
+                </label>
+                <textarea
+                  rows={2}
+                  value={orderForm.notes}
+                  onChange={e => setOrderForm(prev => ({ ...prev, notes: e.target.value }))}
+                  placeholder="Detalles de acabado, tapizado, dirección de entrega o aclaraciones para el taller..."
+                  className="w-full bg-white border border-sand rounded-xl p-2.5 text-xs text-brown focus:outline-none focus:border-terra resize-none font-sans"
+                />
+              </div>
+
+              {/* Adjuntos y Planos */}
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] uppercase font-bold tracking-wider text-stone flex items-center gap-1.5">
+                    <Paperclip className="w-3.5 h-3.5 text-terra" />
+                    <span>Archivos o Fotos Adjuntas ({(orderForm.attachments || []).length})</span>
+                  </label>
+                  <label className="text-[10px] font-bold text-terra hover:underline cursor-pointer flex items-center gap-1">
+                    <Plus className="w-3 h-3" />
+                    <span>Agregar Archivos</span>
+                    <input
+                      type="file"
+                      multiple
+                      accept="image/*,.pdf"
+                      onChange={e => {
+                        const files = e.target.files;
+                        if (!files || files.length === 0) return;
+                        Array.from(files).forEach(file => {
+                          const reader = new FileReader();
+                          reader.onload = () => {
+                            const newAtt = {
+                              id: `att-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+                              name: file.name,
+                              url: reader.result as string,
+                              size: file.size,
+                              type: file.type
+                            };
+                            setOrderForm(prev => ({
+                              ...prev,
+                              attachments: [...(prev.attachments || []), newAtt]
+                            }));
+                          };
+                          reader.readAsDataURL(file);
+                        });
+                        e.target.value = '';
+                      }}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+
+                {(orderForm.attachments || []).length > 0 && (
+                  <div className="flex flex-wrap gap-2 max-h-28 overflow-y-auto p-2 bg-light-cream/40 border border-sand rounded-xl">
+                    {(orderForm.attachments || []).map(att => (
+                      <div
+                        key={att.id}
+                        className="flex items-center gap-1.5 bg-white border border-sand px-2.5 py-1.5 rounded-lg text-xs group"
+                      >
+                        {att.url && att.url.startsWith('data:image') ? (
+                          <img
+                            src={att.url}
+                            alt={att.name}
+                            onClick={() => setPreviewImage(att)}
+                            className="w-5 h-5 rounded object-cover cursor-pointer hover:opacity-80"
+                          />
+                        ) : (
+                          <File className="w-3.5 h-3.5 text-stone" />
+                        )}
+                        <span className="truncate max-w-[120px] text-[11px] font-medium text-brown">
+                          {att.name}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOrderForm(prev => ({
+                              ...prev,
+                              attachments: (prev.attachments || []).filter(a => a.id !== att.id)
+                            }));
+                          }}
+                          className="text-stone hover:text-rose-600 p-0.5 rounded cursor-pointer ml-1"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Modal Actions Footer */}
+            <div className="p-4 border-t border-sand bg-light-cream/30 flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => setShowOrderModal(false)}
+                className="px-4 py-2.5 border border-sand text-stone hover:text-brown hover:bg-cream/40 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={confirmOrder}
+                className="flex-1 sm:flex-initial px-6 py-2.5 bg-brown hover:bg-terra text-cream hover:text-white rounded-xl text-xs font-bold uppercase tracking-wider transition-all shadow-sm active:scale-95 flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Check className="w-4 h-4" />
+                <span>Confirmar y Crear Pedido</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* SALE DETAIL MODAL */}
       <SaleDetailModal
